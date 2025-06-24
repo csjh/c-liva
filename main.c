@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
     fread(source.data, 1, source.size, source_fp);
     fclose(source_fp);
 
-    span object_code = compile(source);
+    vector object_code = compile(source);
     if (object_code.size == -1) {
         fprintf(stderr, "Compilation failed\n");
         free(source.data);
