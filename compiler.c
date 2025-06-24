@@ -105,12 +105,6 @@ bool parse_type_qualifier(context *ctx, string ident, declaration *decl) {
         // string_literal("_Atomic"),
     };
 
-    int long unsigned x = 0;
-
-    int volatile unsigned long const _Atomic long typedef y;
-
-    int typedef z;
-
     for (int i = 0; i < array_length(type_qualifiers); i++) {
         if (string_equal(ident, type_qualifiers[i])) {
             decl->type_qualifier_spec_mask |= (1 << i);
