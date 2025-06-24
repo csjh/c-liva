@@ -9,44 +9,56 @@ void init_context(context *ctx, span source) {
     ctx->result = (vector){0};
 }
 
+inline char peek(context *ctx) {
+    if (ctx->i >= ctx->source.size) {
+        // unexpected end of input
+        longjmp(ctx->error_jump, 1);
+    }
+    return ctx->source.data[ctx->i];
+}
+
+inline char next(context *ctx) {
+    char c = peek(ctx);
+    ctx->i++;
+    return c;
+}
+
 void skip_whitespace(context *ctx) {
-    while (ctx->i < ctx->source.size && isspace(ctx->source.data[ctx->i])) {
-        ctx->i++;
+    while (isspace(peek(ctx))) {
+        next(ctx);
     }
 }
 
 string get_identifier(context *ctx) {
-    if (ctx->i >= ctx->source.size || !isalpha(ctx->source.data[ctx->i])) {
+    if (!isalpha(peek(ctx))) {
         // expected identifier
         longjmp(ctx->error_jump, 1);
     }
 
     size_t start = ctx->i;
-    while (ctx->i < ctx->source.size && isalnum(ctx->source.data[ctx->i])) {
-        ctx->i++;
+    while (isalnum(peek(ctx))) {
+        next(ctx);
     }
 
     return (string){ctx->source.data + start, ctx->i - start};
 }
 
 void expect(context *ctx, char c) {
-    if (ctx->i >= ctx->source.size || ctx->source.data[ctx->i] != c) {
+    if (next(ctx) != c) {
         // expected character
         longjmp(ctx->error_jump, 1);
     }
-    ctx->i++;
 }
 
 uint64_t execute_constant_expression(context *ctx) {
-    if (!isdigit(ctx->source.data[ctx->i])) {
+    if (!isdigit(peek(ctx))) {
         // expected constant expression
         longjmp(ctx->error_jump, 1);
     }
 
     uint64_t value = 0;
-    while (ctx->i < ctx->source.size && isdigit(ctx->source.data[ctx->i])) {
-        value = value * 10 + (ctx->source.data[ctx->i] - '0');
-        ctx->i++;
+    while (isdigit(peek(ctx))) {
+        value = value * 10 + (next(ctx) - '0');
     }
     return value;
 }
