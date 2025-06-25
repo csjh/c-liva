@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <stdlib.h>
 
 typedef struct vector {
     void *data;

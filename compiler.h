@@ -12,31 +12,6 @@ typedef struct span {
 
 vector compile(span source);
 
-const string KEYWORDS[] = {
-    string_literal("alignof"),       string_literal("sizeof"),
-    string_literal("char"),          string_literal("double"),
-    string_literal("enum"),          string_literal("float"),
-    string_literal("int"),           string_literal("long"),
-    string_literal("short"),         string_literal("struct"),
-    string_literal("typedef"),       string_literal("union"),
-    string_literal("void"),          string_literal("_Bool"),
-    string_literal("_Complex"),      string_literal("_Imaginary"),
-    string_literal("auto"),          string_literal("const"),
-    string_literal("extern"),        string_literal("inline"),
-    string_literal("register"),      string_literal("restrict"),
-    string_literal("signed"),        string_literal("static"),
-    string_literal("unsigned"),      string_literal("volatile"),
-    string_literal("_Alignas"),      string_literal("_Atomic"),
-    string_literal("_Thread_local"), string_literal("break"),
-    string_literal("case"),          string_literal("continue"),
-    string_literal("default"),       string_literal("do"),
-    string_literal("else"),          string_literal("for"),
-    string_literal("goto"),          string_literal("if"),
-    string_literal("return"),        string_literal("switch"),
-    string_literal("while"),         string_literal("_Generic"),
-    string_literal("_Noreturn"),     string_literal("_Static_assert"),
-};
-
 typedef enum primitive {
     void_,
     char_,
@@ -55,6 +30,8 @@ typedef enum primitive {
     double_,
     long_double,
     // todo: complex, imaginary
+
+    n_primitive_types
 } primitive_type;
 
 typedef enum type_classification {
@@ -69,11 +46,11 @@ typedef enum type_classification {
 // possible optimization down the line:
 // make any type pointer into an index into a type table
 typedef struct type {
-    string name;
+    uint32_t id;
+    uint32_t size;
 
     bool const_;
     bool volatile_;
-    bool restrict_;
 
     type_classification tag;
     union {
@@ -81,31 +58,35 @@ typedef struct type {
         struct array_type *array;
         struct structure_type *structure;
         struct function_type *function;
-        struct type *pointer;
+        struct pointer_type *pointer;
     };
 } type;
 
 typedef struct array_type {
-    size_t size;
     type element_type;
+    size_t length;
 } array_type;
 
 typedef struct member {
     string name;
-    type *ty;
+    type ty;
     size_t offset;
 } member;
 
 typedef struct structure_type {
     string name;
-    size_t size;
     vector members;
 } structure_type;
 
 typedef struct function_type {
-    struct type *return_type;
+    type return_type;
     vector parameters;
 } function_type;
+
+typedef struct pointer_type {
+    type ty;
+    bool restrict_;
+} pointer_type;
 
 typedef struct value {
     enum location { reg, stack, imm, flags };
@@ -156,8 +137,19 @@ typedef struct declaration {
     function_specifier function_spec_mask;
     size_t alignment;
 
-    type *ty;
+    type ty;
 } declaration;
+
+typedef struct declarator {
+    declaration decl;
+
+    string name;
+} declarator;
+
+typedef struct alias {
+    string name;
+    type ty;
+} alias;
 
 typedef struct context {
     jmp_buf error_jump;
@@ -165,10 +157,11 @@ typedef struct context {
     span source;
     size_t i;
 
-    type *structs;
-    type *unions;
-    type *enums;
-    type *typedefs;
+    vector types;
+    alias *structs;
+    alias *unions;
+    alias *enums;
+    alias *typedefs;
 
     vector result;
 } context;

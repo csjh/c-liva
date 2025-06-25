@@ -1,5 +1,6 @@
 #include "./compiler.h"
 #include <ctype.h>
+#include <stdio.h>
 
 #define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
 
@@ -7,9 +8,18 @@ void init_context(context *ctx, span source) {
     ctx->source = source;
     ctx->i = 0;
     ctx->result = (vector){0};
+
+    ctx->types = (vector){0};
+    for (int i = 0; i < n_primitive_types; i++) {
+        type ty = {0};
+        ty.id = i;
+        ty.tag = basic;
+        ty.primitive = i;
+        vector_push(type, &ctx->types, ty);
+    }
 }
 
-inline char peek(context *ctx) {
+char peek(context *ctx) {
     if (ctx->i >= ctx->source.size) {
         // unexpected end of input
         longjmp(ctx->error_jump, 1);
@@ -17,7 +27,7 @@ inline char peek(context *ctx) {
     return ctx->source.data[ctx->i];
 }
 
-inline char next(context *ctx) {
+char next(context *ctx) {
     char c = peek(ctx);
     ctx->i++;
     return c;
@@ -81,16 +91,28 @@ bool parse_declaration_specifiers(context *ctx, string ident,
 }
 
 bool parse_type_specifier(context *ctx, string ident, declaration *decl) {
-    const string primitive_type_specifiers[] = {
-        string_literal("void"),     string_literal("char"),
-        string_literal("short"),    string_literal("int"),
-        string_literal("long"),     string_literal("float"),
-        string_literal("double"),   string_literal("signed"),
-        string_literal("unsigned"), string_literal("_Bool")};
+    struct primitive_type_specifier {
+        primitive_type type;
+        string name;
+    };
+
+    const struct primitive_type_specifier primitive_type_specifiers[] = {
+        {void_, string_literal("void")},
+        {char_, string_literal("char")},
+        {short_, string_literal("short")},
+        {int_, string_literal("int")},
+        {long_, string_literal("long")},
+        {float_, string_literal("float")},
+        {double_, string_literal("double")},
+        {signed_char, string_literal("signed")},
+        {unsigned_char, string_literal("unsigned")},
+        {bool_, string_literal("_Bool")},
+    };
 
     for (int i = 0; i < array_length(primitive_type_specifiers); i++) {
-        if (string_equal(ident, primitive_type_specifiers[i])) {
-            // handle
+        if (string_equal(ident, primitive_type_specifiers[i].name)) {
+            decl->ty =
+                vector_at(type, &ctx->types, primitive_type_specifiers[i].type);
             return true;
         }
     }
@@ -145,13 +167,37 @@ bool parse_alignment_specifier(context *ctx, string ident, declaration *decl) {
     return false;
 }
 
-void parse_declaration(context *ctx) {}
+void parse_declarator(context *ctx) {
 
-type *parse_type(context *ctx, string *maybe_identifier) {
-    // types can span over an identifier, i.e. int arr[5];
 }
 
-void parse_top_level_declaration(context *ctx);
+void parse_declaration(context *ctx) {
+    declaration decl = {0};
+
+    string ident;
+    do {
+        skip_whitespace(ctx);
+        ident = get_identifier(ctx);
+        skip_whitespace(ctx);
+
+        if (parse_alignment_specifier(ctx, ident, &decl))
+            continue;
+        if (parse_function_specifier(ctx, ident, &decl))
+            continue;
+        if (parse_declaration_specifiers(ctx, ident, &decl))
+            continue;
+        if (parse_type_qualifier(ctx, ident, &decl))
+            continue;
+        if (parse_type_specifier(ctx, ident, &decl))
+            continue;
+    } while (0);
+
+    
+}
+
+void parse_external_declaration(context *ctx) {
+    parse_declaration(ctx);
+}
 
 vector compile(span source) {
     context ctx;
@@ -164,7 +210,7 @@ vector compile(span source) {
         skip_whitespace(&ctx);
 
         while (ctx.i < ctx.source.size) {
-            parse_top_level_declaration(&ctx);
+            parse_external_declaration(&ctx);
             skip_whitespace(&ctx);
         }
     }
