@@ -167,17 +167,40 @@ bool parse_alignment_specifier(context *ctx, string ident, declaration *decl) {
     return false;
 }
 
-void parse_declarator(context *ctx) {
-
+string parse_declarator_identifier(context *ctx, int *pointer_count) {
+    skip_whitespace(ctx);
+    if (peek(ctx) == '*') {
+        (*pointer_count)++;
+        next(ctx);
+        skip_whitespace(ctx);
+        return parse_declarator_identifier(ctx, pointer_count);
+    } else if (peek(ctx) == '(') {
+        next(ctx);
+        skip_whitespace(ctx);
+        string ident = parse_declarator_identifier(ctx, pointer_count);
+        skip_whitespace(ctx);
+        expect(ctx, ')');
+        return ident;
+    } else {
+        return get_identifier(ctx);
+    }
 }
+
+void parse_declarator(context *ctx) {}
 
 void parse_declaration(context *ctx) {
     declaration decl = {0};
 
+    bool missing_identifier = false;
     string ident;
     do {
         skip_whitespace(ctx);
-        ident = get_identifier(ctx);
+        if (!isalpha(peek(ctx))) {
+            missing_identifier = true;
+            break;
+        } else {
+            ident = get_identifier(ctx);
+        }
         skip_whitespace(ctx);
 
         if (parse_alignment_specifier(ctx, ident, &decl))
@@ -192,12 +215,17 @@ void parse_declaration(context *ctx) {
             continue;
     } while (0);
 
-    
+    int pointer_count = 0;
+    if (missing_identifier) {
+        parse_declarator_identifier(ctx, &pointer_count);
+    }
+
+    // at this point, it's either the end of the declaration,
+    // or the length of an array declaration
+    // or the parameter list of a function declaration (*or definition*)
 }
 
-void parse_external_declaration(context *ctx) {
-    parse_declaration(ctx);
-}
+void parse_external_declaration(context *ctx) { parse_declaration(ctx); }
 
 vector compile(span source) {
     context ctx;
