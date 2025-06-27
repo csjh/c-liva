@@ -188,7 +188,7 @@ string parse_declarator_identifier(context *ctx, int *pointer_count) {
 
 void parse_declarator(context *ctx) {}
 
-void parse_declaration(context *ctx) {
+declaration parse_declaration(context *ctx) {
     declaration decl = {0};
 
     bool missing_identifier = false;
@@ -217,12 +217,40 @@ void parse_declaration(context *ctx) {
 
     int pointer_count = 0;
     if (missing_identifier) {
-        parse_declarator_identifier(ctx, &pointer_count);
+        ident = parse_declarator_identifier(ctx, &pointer_count);
     }
 
     // at this point, it's either the end of the declaration,
     // or the length of an array declaration
     // or the parameter list of a function declaration (*or definition*)
+
+    switch (peek(ctx)) {
+    case '[': {
+        expect(ctx, '[');
+        skip_whitespace(ctx);
+        uint64_t length = execute_constant_expression(ctx);
+        decl.ty.tag = array;
+        decl.ty.array = malloc(sizeof(array_type));
+        decl.ty.array->length = length;
+        decl.ty.array->element_type = decl.ty;
+        skip_whitespace(ctx);
+        expect(ctx, ']');
+        break;
+    }
+    case '(': {
+        expect(ctx, '(');
+        parse_declarator(ctx);
+        skip_whitespace(ctx);
+        expect(ctx, ')');
+        decl.ty.tag = function;
+        break;
+    }
+    default:
+        // should log here or something when debugging
+        break;
+    }
+
+    return decl;
 }
 
 void parse_external_declaration(context *ctx) { parse_declaration(ctx); }
