@@ -1,16 +1,10 @@
-#include "./string-span.h"
-#include "./vector.h"
+#include "./containers.h"
 #include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct span {
-    char *data;
-    size_t size;
-} span;
-
-vector compile(span source);
+owned_span compile(string source);
 
 typedef enum primitive {
     void_,
@@ -75,12 +69,12 @@ typedef struct member {
 
 typedef struct structure_type {
     string name;
-    vector members;
+    owned_span members;
 } structure_type;
 
 typedef struct function_type {
     type return_type;
-    vector parameters;
+    owned_span parameters;
 } function_type;
 
 typedef struct pointer_type {
@@ -90,9 +84,18 @@ typedef struct pointer_type {
 
 typedef struct value {
     enum location { reg, stack, imm, flags };
-
     enum location loc;
-    uint32_t val;
+
+    type *ty;
+
+    union {
+        uint32_t u32;
+        uint64_t u64;
+        int32_t i32;
+        int64_t i64;
+        float f32;
+        double f64;
+    };
 } value;
 
 typedef struct variable {
@@ -154,7 +157,7 @@ typedef struct alias {
 typedef struct context {
     jmp_buf error_jump;
 
-    span source;
+    string source;
     size_t i;
 
     vector types;

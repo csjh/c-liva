@@ -15,23 +15,23 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    span source;
+    string source;
 
     fseek(source_fp, 0, SEEK_END);
-    source.size = ftell(source_fp);
+    source.length = ftell(source_fp);
     fseek(source_fp, 0, SEEK_SET);
 
-    source.data = malloc(source.size);
+    source.data = malloc(source.length);
     if (!source.data) {
         perror("Failed to allocate memory for source file");
         fclose(source_fp);
         return 1;
     }
 
-    fread(source.data, 1, source.size, source_fp);
+    fread(source.data, 1, source.length, source_fp);
     fclose(source_fp);
 
-    vector object_code = compile(source);
+    owned_span object_code = compile(source);
     if (object_code.size == -1) {
         fprintf(stderr, "Compilation failed\n");
         free(source.data);

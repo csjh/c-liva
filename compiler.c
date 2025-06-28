@@ -1,10 +1,9 @@
 #include "./compiler.h"
 #include <ctype.h>
-#include <stdio.h>
 
 #define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
 
-void init_context(context *ctx, span source) {
+void init_context(context *ctx, string source) {
     ctx->source = source;
     ctx->i = 0;
     ctx->result = (vector){0};
@@ -20,7 +19,7 @@ void init_context(context *ctx, span source) {
 }
 
 char peek(context *ctx) {
-    if (ctx->i >= ctx->source.size) {
+    if (ctx->i >= ctx->source.length) {
         // unexpected end of input
         longjmp(ctx->error_jump, 1);
     }
@@ -255,7 +254,7 @@ declaration parse_declaration(context *ctx) {
 
 void parse_external_declaration(context *ctx) { parse_declaration(ctx); }
 
-vector compile(span source) {
+owned_span compile(string source) {
     context ctx;
     init_context(&ctx, source);
 
@@ -265,11 +264,11 @@ vector compile(span source) {
     } else {
         skip_whitespace(&ctx);
 
-        while (ctx.i < ctx.source.size) {
+        while (ctx.i < ctx.source.length) {
             parse_external_declaration(&ctx);
             skip_whitespace(&ctx);
         }
     }
 
-    return ctx.result;
+    return owned_span_from_vector(ctx.result);
 }
