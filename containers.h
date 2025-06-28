@@ -26,12 +26,17 @@ typedef struct string {
 } string;
 
 #define string_literal(str) ((string){.data = str, .length = sizeof(str) - 1})
+#define invalid_str ((string){.data = NULL, .length = -1})
 
 static inline bool string_equal(string a, string b) {
     if (a.length != b.length)
         return false;
 
     return memcmp(a.data, b.data, a.length) == 0;
+}
+
+static inline bool string_is_valid(string str) {
+    return str.data != NULL && str.length != (size_t)-1;
 }
 
 typedef struct span {
@@ -47,5 +52,6 @@ typedef struct owned_span {
 #define make_owned_span(ty, size)                                              \
     ((owned_span){.data = malloc((size) * sizeof(ty)), .size = (size)})
 
+// could be worth realloc'ing down to the final size
 #define owned_span_from_vector(vec)                                            \
     ((owned_span){.data = (vec).data, .size = (vec).size})
