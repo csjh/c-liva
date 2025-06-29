@@ -37,6 +37,32 @@ typedef enum type_classification {
     // todo: atomic
 } type_classification;
 
+typedef struct array_type {
+    const struct type *element_type;
+    size_t length;
+} array_type;
+
+typedef struct member {
+    string name;
+    const struct type *ty;
+    size_t offset;
+} member;
+
+typedef struct structure_type {
+    string name;
+    owned_span members;
+} structure_type;
+
+typedef struct function_type {
+    const struct type *return_type;
+    owned_span parameters;
+} function_type;
+
+typedef struct pointer_type {
+    const struct type *ty;
+    bool restrict_;
+} pointer_type;
+
 // possible optimization down the line:
 // make any type pointer into an index into a type table
 typedef struct type {
@@ -49,44 +75,19 @@ typedef struct type {
     type_classification tag;
     union {
         primitive_type primitive;
-        struct array_type *array;
-        struct structure_type *structure;
-        struct function_type *function;
-        struct pointer_type *pointer;
+        array_type array;
+        structure_type structure;
+        function_type function;
+        pointer_type pointer;
     };
 } type;
 
-typedef struct array_type {
-    type element_type;
-    size_t length;
-} array_type;
-
-typedef struct member {
-    string name;
-    type ty;
-    size_t offset;
-} member;
-
-typedef struct structure_type {
-    string name;
-    owned_span members;
-} structure_type;
-
-typedef struct function_type {
-    type return_type;
-    owned_span parameters;
-} function_type;
-
-typedef struct pointer_type {
-    type ty;
-    bool restrict_;
-} pointer_type;
+enum location { reg, stack, imm, flags };
 
 typedef struct value {
-    enum location { reg, stack, imm, flags };
     enum location loc;
 
-    type *ty;
+    const type *ty;
 
     union {
         uint32_t u32;
@@ -100,13 +101,13 @@ typedef struct value {
 
 typedef struct variable {
     string name;
-    type *ty;
+    const type *ty;
     value val;
 } variable;
 
 typedef struct global {
     string name;
-    type *ty;
+    const type *ty;
     uint32_t offset;
 } global;
 
@@ -121,37 +122,34 @@ typedef enum storage_class_specifier {
 
 typedef enum type_qualifier {
     none = 0,
-    const_ = 0b1,
-    volatile_ = 0b10,
-    restrict_ = 0b100,
+    const_ = 1,
+    volatile_ = 2,
+    restrict_ = 4,
 } type_qualifier;
 
 typedef enum function_specifier {
     /* none = 0 */
-    inline_ = 0b1,
-    noreturn = 0b10,
+    inline_ = 1,
+    noreturn = 2,
 } function_specifier;
 
-typedef struct declaration {
-    string name;
-
+typedef struct partial_type {
     storage_class_specifier storage_class_spec;
     type_qualifier type_qualifier_spec_mask;
     function_specifier function_spec_mask;
     size_t alignment;
 
-    type ty;
-} declaration;
+    const type *ty;
+} partial_type;
 
 typedef struct declarator {
-    declaration decl;
-
     string name;
+    const type *ty;
 } declarator;
 
 typedef struct alias {
     string name;
-    type ty;
+    const type *ty;
 } alias;
 
 typedef struct context {
@@ -165,6 +163,9 @@ typedef struct context {
     alias *unions;
     alias *enums;
     alias *typedefs;
+
+    vector globals;
+    vector functions;
 
     vector result;
 } context;
