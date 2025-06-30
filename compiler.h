@@ -83,12 +83,14 @@ typedef struct type {
 } type;
 
 enum location { reg, stack, imm, flags };
+enum value_category { lvalue, rvalue, function_designator };
 
 typedef struct value {
-    enum location loc;
-
+    enum value_category category;
     const type *ty;
+    bool is_constant;
 
+    enum location loc;
     union {
         uint32_t u32;
         uint64_t u64;
