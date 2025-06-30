@@ -39,6 +39,18 @@ static inline bool string_is_valid(string str) {
     return str.data != NULL && str.length != (size_t)-1;
 }
 
+typedef struct shortstring {
+    char data[7];
+    char length;
+} shortstring;
+
+static inline bool short_string_equal(shortstring a, shortstring b) {
+    return memcmp(&a, &b, sizeof(shortstring)) == 0;
+}
+
+#define shortstring_literal(str)                                               \
+    ((shortstring){.data = str, .length = sizeof(str) - 1})
+
 typedef struct span {
     void *data;
     size_t size;

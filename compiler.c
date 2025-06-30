@@ -136,6 +136,17 @@ char peek(context *ctx) {
     return c;
 }
 
+shortstring multipeek(context *ctx, size_t n) {
+    n = (n > ctx->source.length - ctx->i) ? ctx->source.length - ctx->i : n;
+
+    shortstring result = {0};
+    for (size_t i = 0; i < n; i++) {
+        result.data[i] = ctx->source.data[ctx->i + i];
+    }
+    result.length = n;
+    return result;
+}
+
 char next_with_whitespace(context *ctx) {
     char c = peek(ctx);
     ctx->i++;
@@ -178,6 +189,531 @@ void expect(context *ctx, char c) {
         // expected character
         longjmp(ctx->error_jump, 1);
     }
+}
+
+value parse_expression(context *ctx);
+value parse_comma_expression(context *ctx);
+value parse_cast_expression(context *ctx);
+
+const type *parse_type_name(context *ctx) { return NULL; }
+
+uint64_t parse_constant(context *ctx) {
+    if (peek(ctx) == '0') {
+        next(ctx);
+        if (peek(ctx) == 'x' || peek(ctx) == 'X') {
+            next(ctx);
+            uint64_t value = 0;
+            while (isxdigit(peek(ctx))) {
+                char c = next_with_whitespace(ctx);
+                if (isdigit(c)) {
+                    value = value * 16 + (c - '0');
+                } else if (c >= 'a' && c <= 'f') {
+                    value = value * 16 + (c - 'a' + 10);
+                } else if (c >= 'A' && c <= 'F') {
+                    value = value * 16 + (c - 'A' + 10);
+                }
+            }
+            skip_whitespace(ctx);
+            return value;
+        } else {
+            uint64_t value = 0;
+            while ('0' <= peek(ctx) && peek(ctx) <= '7') {
+                value = value * 8 + (next_with_whitespace(ctx) - '0');
+            }
+            skip_whitespace(ctx);
+            return value;
+        }
+    } else {
+        uint64_t value = 0;
+        while (isdigit(peek(ctx))) {
+            value = value * 10 + (next_with_whitespace(ctx) - '0');
+        }
+        skip_whitespace(ctx);
+        return value;
+    }
+}
+
+value parse_primary_expression(context *ctx) {
+    if (isalpha(peek(ctx))) {
+        // identifier / enum constant / generic
+        string ident = get_identifier(ctx);
+        if (string_equal(ident, string_literal("_Generic"))) {
+            // todo: handle _Generic
+        } else {
+            // todo: turn into value
+            // don't forget enums
+        }
+        return (value){};
+    } else if ('0' <= peek(ctx) && peek(ctx) <= '9') {
+        // integer / floating constant
+        uint64_t constant = parse_constant(ctx);
+        return (value){};
+    } else if (peek(ctx) == '"') {
+        // string literal
+        // todo: put string literal into readonly, this is just a pointer
+        return (value){};
+    } else if (peek(ctx) == '(') {
+        // parenthesized expression
+        expect(ctx, '(');
+        value expr = parse_expression(ctx);
+        expect(ctx, ')');
+        return expr;
+    } else if (peek(ctx) == '\'') {
+        // character literal
+        expect(ctx, '\'');
+        char c = next(ctx);
+        expect(ctx, '\'');
+        return (value){/* character literal */};
+    } else {
+        // expected primary expression
+        longjmp(ctx->error_jump, 1);
+    }
+}
+
+value parse_postfix_expression(context *ctx) {
+    // todo: support compound literals
+    value base = parse_primary_expression(ctx);
+    if (peek(ctx) == '[') {
+        // array subscript
+        expect(ctx, '[');
+        value index = parse_expression(ctx);
+        expect(ctx, ']');
+        // todo: handle array subscript
+        return (value){/* array subscript */};
+    } else if (peek(ctx) == '(') {
+        // function call
+        expect(ctx, '(');
+        while (peek(ctx) != ')') {
+            value arg = parse_expression(ctx);
+            if (peek(ctx) != ')') {
+                expect(ctx, ',');
+            }
+        }
+        expect(ctx, ')');
+        return (value){/* function call */};
+    } else if (peek(ctx) == '.') {
+        // member access
+        next(ctx);
+        string member = get_identifier(ctx);
+        // todo: handle member access
+        return (value){/* member access */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("->"))) {
+        // pointer member access
+        next(ctx);
+        next(ctx);
+        string member = get_identifier(ctx);
+        return (value){/* pointer member access */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("++"))) {
+        // unary increment
+        next(ctx);
+        next(ctx);
+        // do something with the unary increment
+        return (value){/* unary increment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("--"))) {
+        // unary decrement
+        next(ctx);
+        next(ctx);
+        // do something with the unary decrement
+        return (value){/* unary decrement */};
+    }
+    return base;
+}
+
+value parse_unary_expression(context *ctx) {
+    if (short_string_equal(multipeek(ctx, 2), shortstring_literal("++"))) {
+        next(ctx);
+        next(ctx);
+        value operand = parse_unary_expression(ctx);
+        // do something with the unary plus
+        return (value){/* unary plus */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("--"))) {
+        next(ctx);
+        next(ctx);
+        value operand = parse_unary_expression(ctx);
+        // do something with the unary minus
+        return (value){/* unary minus */};
+    } else if (peek(ctx) == '&') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with the unary plus
+        return (value){/* unary plus */};
+    } else if (peek(ctx) == '*') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with the unary minus
+        return (value){/* unary minus */};
+    } else if (peek(ctx) == '+') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with the logical not
+        return (value){/* logical not */};
+    } else if (peek(ctx) == '-') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with the bitwise not
+        return (value){/* bitwise not */};
+    } else if (peek(ctx) == '~') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with the address of
+        return (value){/* address of */};
+    } else if (peek(ctx) == '!') {
+        next(ctx);
+        value operand = parse_cast_expression(ctx);
+        // do something with dereferencing
+        return (value){/* dereference */};
+    } else if (short_string_equal(multipeek(ctx, 6),
+                                  shortstring_literal("sizeof"))) {
+        next(ctx);
+        const type *ty = NULL;
+        if (peek(ctx) == '(') {
+            expect(ctx, '(');
+            ty = parse_type_name(ctx);
+            if (!ty) {
+                ty = parse_comma_expression(ctx).ty;
+            }
+            expect(ctx, ')');
+        } else {
+            ty = parse_unary_expression(ctx).ty;
+        }
+        // todo: use ty->size
+        return (value){/* sizeof expression */};
+    } else {
+        // todo: support _Alignof
+        return parse_postfix_expression(ctx);
+    }
+}
+
+value parse_cast_expression(context *ctx) {
+    if (peek(ctx) == '(') {
+        next(ctx);
+        const type *ty = parse_type_name(ctx);
+        if (ty) {
+
+        }
+        expect(ctx, ')');
+        return (value){/* handle cast to type */};
+    }
+    return parse_unary_expression(ctx);
+}
+
+value parse_multiplicative_expression(context *ctx) {
+    value left = parse_cast_expression(ctx);
+
+    while (true) {
+        if (peek(ctx) == '*') {
+            next(ctx);
+            value right = parse_cast_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (peek(ctx) == '/') {
+            next(ctx);
+            value right = parse_cast_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (peek(ctx) == '%') {
+            next(ctx);
+            value right = parse_cast_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+value parse_additive_expression(context *ctx) {
+    value left = parse_multiplicative_expression(ctx);
+
+    while (true) {
+        if (peek(ctx) == '+') {
+            next(ctx);
+            value right = parse_multiplicative_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (peek(ctx) == '-') {
+            next(ctx);
+            value right = parse_multiplicative_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+value parse_shift_expression(context *ctx) {
+    value left = parse_additive_expression(ctx);
+
+    while (true) {
+        shortstring op = multipeek(ctx, 2);
+        if (short_string_equal(op, shortstring_literal("<<"))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_additive_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (short_string_equal(op, shortstring_literal(">>"))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_additive_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+value parse_relational_expression(context *ctx) {
+    value left = parse_shift_expression(ctx);
+
+    while (true) {
+        shortstring op = multipeek(ctx, 2);
+        if (peek(ctx) == '<') {
+            next(ctx);
+            value right = parse_shift_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (peek(ctx) == '>') {
+            next(ctx);
+            value right = parse_shift_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (short_string_equal(op, shortstring_literal("<="))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_shift_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (short_string_equal(op, shortstring_literal(">="))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_shift_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+value parse_equality_expression(context *ctx) {
+    value left = parse_relational_expression(ctx);
+
+    while (true) {
+        shortstring op = multipeek(ctx, 2);
+        if (short_string_equal(op, shortstring_literal("=="))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_relational_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else if (short_string_equal(op, shortstring_literal("!="))) {
+            next(ctx);
+            next(ctx);
+            value right = parse_relational_expression(ctx);
+            // do something with left and right
+            left = (value){/* combine left and right */};
+        } else {
+            break;
+        }
+    }
+
+    return left;
+}
+
+value parse_and_expression(context *ctx) {
+    value left = parse_equality_expression(ctx);
+
+    while (peek(ctx) == '&') {
+        next(ctx);
+        value right = parse_equality_expression(ctx);
+        // do something with left and right
+        left = (value){/* combine left and right */};
+    }
+
+    return left;
+}
+
+value parse_exclusive_or_expression(context *ctx) {
+    value left = parse_and_expression(ctx);
+
+    while (peek(ctx) == '^') {
+        next(ctx);
+        value right = parse_and_expression(ctx);
+        // do something with left and right
+        left = (value){/* combine left and right */};
+    }
+
+    return left;
+}
+
+value parse_inclusive_or_expression(context *ctx) {
+    value left = parse_exclusive_or_expression(ctx);
+
+    while (peek(ctx) == '|') {
+        next(ctx);
+        value right = parse_exclusive_or_expression(ctx);
+        // do something with left and right
+        left = (value){/* combine left and right */};
+    }
+
+    return left;
+}
+
+value parse_logical_and_expression(context *ctx) {
+    value left = parse_inclusive_or_expression(ctx);
+
+    while (short_string_equal(multipeek(ctx, 2), shortstring_literal("&&"))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_inclusive_or_expression(ctx);
+        // do something with left and right
+        left = (value){/* combine left and right */};
+    }
+
+    return left;
+}
+
+value parse_logical_or_expression(context *ctx) {
+    value left = parse_logical_and_expression(ctx);
+
+    while (short_string_equal(multipeek(ctx, 2), shortstring_literal("||"))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_logical_and_expression(ctx);
+        // do something with left and right
+        left = (value){/* combine left and right */};
+    }
+
+    return left;
+}
+
+value parse_conditional_expression(context *ctx) {
+    value left = parse_logical_or_expression(ctx);
+
+    if (peek(ctx) == '?') {
+        next(ctx);
+        value true_branch = parse_comma_expression(ctx);
+        expect(ctx, ':');
+        value false_branch = parse_conditional_expression(ctx);
+
+        // todo: handle conditional expression
+        return (value){};
+    }
+
+    return left;
+}
+
+value parse_assignment_expression(context *ctx) {
+    value left = parse_conditional_expression(ctx);
+
+    if (peek(ctx) == '=') {
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("+="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("-="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("*="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("/="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("%="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("&="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("^="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 2),
+                                  shortstring_literal("|="))) {
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 3),
+                                  shortstring_literal("<<="))) {
+        next(ctx);
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (short_string_equal(multipeek(ctx, 3),
+                                  shortstring_literal(">>="))) {
+        next(ctx);
+        next(ctx);
+        next(ctx);
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    }
+
+    return left;
+}
+
+value parse_expression(context *ctx) {
+    return parse_assignment_expression(ctx);
+}
+
+value parse_comma_expression(context *ctx) {
+    value v = parse_expression(ctx);
+    while (peek(ctx) == ',') {
+        expect(ctx, ',');
+        v = parse_expression(ctx);
+    }
+    return v;
 }
 
 uint64_t execute_constant_expression(context *ctx) {
