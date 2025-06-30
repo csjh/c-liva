@@ -996,11 +996,20 @@ owned_span parse_declaration(context *ctx) {
     type *ty = finalize_type(ctx, &partial_ty);
 
     vector declarators = {0};
-    vector_push(declarator, &declarators, parse_declarator(ctx, ty, ident));
-    while (peek(ctx) == ',') {
-        expect(ctx, ',');
-        vector_push(declarator, &declarators,
-                    parse_declarator(ctx, ty, invalid_str));
+
+    while (1) {
+        vector_push(declarator, &declarators, parse_declarator(ctx, ty, ident));
+        if (peek(ctx) == '=') {
+            expect(ctx, '=');
+            value init_value = parse_expression(ctx);
+            // todo: handle initialization, initializer list
+        }
+        if (peek(ctx) == ',') {
+            expect(ctx, ',');
+            ident = invalid_str;
+        } else {
+            break;
+        }
     }
 
     return owned_span_from_vector(declarators);
