@@ -997,7 +997,7 @@ owned_span parse_declaration(context *ctx) {
 
     vector declarators = {0};
 
-    while (1) {
+    while (peek(ctx) != ';') {
         vector_push(declarator, &declarators, parse_declarator(ctx, ty, ident));
         if (peek(ctx) == '=') {
             expect(ctx, '=');
@@ -1012,7 +1012,30 @@ owned_span parse_declaration(context *ctx) {
         }
     }
 
+    expect(ctx, ';');
+
     return owned_span_from_vector(declarators);
+}
+
+string parse_statement(context *ctx);
+
+bool parse_compound_statement(context *ctx) {
+    if (peek(ctx) != '{')
+        return false;
+    expect(ctx, '{');
+
+    while (peek(ctx) != '}') {
+        // somehow disambiguate between declaration and statement
+    }
+
+    expect(ctx, '}');
+    return true;
+}
+
+string parse_statement(context *ctx) {
+    string ident = get_identifier(ctx);
+
+    return ident;
 }
 
 void parse_external_declaration(context *ctx) {
@@ -1021,11 +1044,7 @@ void parse_external_declaration(context *ctx) {
     if (declarations.size == 1 &&
         vector_at(declarator, &declarations, 0).ty->tag == function &&
         peek(ctx) == '{') {
-        expect(ctx, '{');
-        // function definition, todo: handle
-        expect(ctx, '}');
-    } else {
-        expect(ctx, ';');
+        parse_compound_statement(ctx);
     }
 
     for (int i = 0; i < declarations.size; i++) {
