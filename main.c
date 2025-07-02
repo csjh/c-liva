@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
     fclose(source_fp);
 
     owned_span object_code = compile(source);
-    if (object_code.size == -1) {
+    if (object_code.size == invalid_length) {
         fprintf(stderr, "Compilation failed\n");
         free(source.data);
         return 1;

@@ -30,7 +30,8 @@ typedef struct string {
 } string;
 
 #define string_literal(str) ((string){.data = str, .length = sizeof(str) - 1})
-#define invalid_str ((string){.data = NULL, .length = -1})
+#define invalid_length ((size_t)-1)
+#define invalid_str ((string){.data = NULL, .length = invalid_length})
 
 static inline bool string_equal(string a, string b) {
     if (a.length != b.length)
@@ -40,7 +41,7 @@ static inline bool string_equal(string a, string b) {
 }
 
 static inline bool string_is_valid(string str) {
-    return str.data != NULL && str.length != (size_t)-1;
+    return str.data != NULL && str.length != invalid_length;
 }
 
 typedef struct shortstring {
