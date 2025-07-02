@@ -1,6 +1,8 @@
 #include "./compiler.h"
 #include <ctype.h>
+#include <libgen.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
 
@@ -103,10 +105,37 @@ void print_type(const type *ty) {
     }
 }
 
-void init_context(context *ctx, string source) {
-    ctx->source = source;
-    ctx->i = 0;
-    ctx->result = (vector){0};
+void init_context(context *ctx, const char *filepath) {
+    FILE *source_fp = fopen(filepath, "r");
+    if (!source_fp) {
+        // Failed to open source file
+        longjmp(ctx->error_jump, 1);
+    }
+
+    string source;
+
+    fseek(source_fp, 0, SEEK_END);
+    source.length = ftell(source_fp);
+    fseek(source_fp, 0, SEEK_SET);
+
+    source.data = malloc(source.length);
+    if (!source.data) {
+        // Failed to allocate memory for source file
+        fclose(source_fp);
+        longjmp(ctx->error_jump, 1);
+    }
+
+    fread(source.data, 1, source.length, source_fp);
+    fclose(source_fp);
+
+    ctx->filedir = dirname((char *)filepath);
+    ctx->filename = basename((char *)filepath);
+    chdir(ctx->filedir);
+
+    ctx->entry = malloc(sizeof(source_entry));
+    *ctx->entry = (source_entry){source, 0, NULL};
+
+    __FILE__;
 
     ctx->types = (vector){0};
     for (int i = 0; i < n_primitive_types; i++) {
@@ -116,14 +145,24 @@ void init_context(context *ctx, string source) {
         ty.primitive = i;
         vector_push(type, &ctx->types, ty);
     }
+    ctx->structs = (vector){0};
+    ctx->unions = (vector){0};
+    ctx->enums = (vector){0};
+    ctx->typedefs = (vector){0};
+
+    ctx->macros = (vector){0};
+
+    ctx->globals = (vector){0};
+    ctx->functions = (vector){0};
+
+    ctx->result = (vector){0};
 }
 
 bool oob_safe_peek(context *ctx, char *c) {
-    if (ctx->i >= ctx->source.length) {
-        // unexpected end of input
+    if (ctx->entry == NULL) {
         return false;
     }
-    *c = ctx->source.data[ctx->i];
+    *c = ctx->entry->source.data[ctx->entry->i];
     return true;
 }
 
@@ -137,19 +176,21 @@ char peek(context *ctx) {
 }
 
 shortstring multipeek(context *ctx, size_t n) {
-    n = (n > ctx->source.length - ctx->i) ? ctx->source.length - ctx->i : n;
-
+    source_entry entry = *ctx->entry;
     shortstring result = {0};
-    for (size_t i = 0; i < n; i++) {
-        result.data[i] = ctx->source.data[ctx->i + i];
+    size_t i = 0;
+    for (; i < n; i++) {
+        result.data[i] = entry.source.data[entry.i];
+        if (!inplace_advance(&entry))
+            break;
     }
-    result.length = n;
+    result.length = i;
     return result;
 }
 
 char next_with_whitespace(context *ctx) {
     char c = peek(ctx);
-    ctx->i++;
+    advance(&ctx->entry);
     return c;
 }
 
@@ -160,11 +201,156 @@ void skip_whitespace(context *ctx) {
     }
 }
 
+string get_identifier(context *ctx);
+void expect(context *ctx, char c);
+
+string get_multientry_header_file(context *ctx, char delimiter, char *start,
+                                  size_t length) {
+    vector str = {0};
+    for (size_t i = 0; i < length; i++) {
+        vector_push(char, &str, start[i]);
+    }
+
+    while (peek(ctx) != delimiter && peek(ctx) != '\n') {
+        vector_push(char, &str, next_with_whitespace(ctx));
+    }
+    if (peek(ctx) == '\n') {
+        // unterminated header file
+        longjmp(ctx->error_jump, 1);
+    }
+
+    return (string){str.data, str.size};
+}
+
+string get_header_file(context *ctx, char delimiter) {
+    source_entry *entry = ctx->entry;
+    char *start = entry->source.data + entry->i;
+    size_t length = 0;
+    while (peek(ctx) != delimiter && peek(ctx) != '\n') {
+        next_with_whitespace(ctx);
+        length++;
+        if (ctx->entry != entry)
+            return get_multientry_header_file(ctx, delimiter, start, length);
+    }
+    if (peek(ctx) == '\n') {
+        // unterminated header file
+        longjmp(ctx->error_jump, 1);
+    }
+
+    return (string){start, length};
+}
+
+string resolve_file(context *ctx, string filename, bool resolve_local) {
+    if (resolve_local) {
+        // resolve local file
+        char path[1024] = {0};
+        memcpy(path, filename.data, filename.length);
+        FILE *file = fopen(path, "r");
+        if (file) {
+            fseek(file, 0, SEEK_END);
+            size_t length = ftell(file);
+            fseek(file, 0, SEEK_SET);
+
+            char *buffer = malloc(length);
+            fread(buffer, 1, length, file);
+            fclose(file);
+
+            return (string){buffer, length};
+        }
+    }
+    // todo: resolve from more places
+
+    // file not found
+    longjmp(ctx->error_jump, 1);
+}
+
+void insert_entry(context *ctx, string contents) {
+    source_entry *new_entry = malloc(sizeof(source_entry));
+    *new_entry = (source_entry){contents, 0, ctx->entry};
+    ctx->entry = new_entry;
+}
+
+void skip_fluff(context *ctx) {
+    bool preprocessor_eligible = false;
+    char c;
+    while (oob_safe_peek(ctx, &c)) {
+        if (isspace(c)) {
+            if (c == '\n')
+                preprocessor_eligible = true;
+            next_with_whitespace(ctx);
+        } else if (preprocessor_eligible && c == '#') {
+            next_with_whitespace(ctx);
+            while (oob_safe_peek(ctx, &c) && c == ' ') {
+                next_with_whitespace(ctx);
+            }
+            string ident = get_identifier(ctx);
+            if (string_equal(ident, string_literal("include"))) {
+                string filename;
+                bool resolve_local;
+                if (peek(ctx) == '<') {
+                    next_with_whitespace(ctx);
+                    filename = get_header_file(ctx, '>');
+                    expect(ctx, '>');
+                    resolve_local = false;
+                } else if (peek(ctx) == '"') {
+                    next_with_whitespace(ctx);
+                    filename = get_header_file(ctx, '"');
+                    expect(ctx, '"');
+                    resolve_local = true;
+                } else {
+                    // expected include directive
+                    longjmp(ctx->error_jump, 1);
+                }
+                string contents = resolve_file(ctx, filename, resolve_local);
+                insert_entry(ctx, contents);
+            } else if (string_equal(ident, string_literal("define"))) {
+                // handle #define directive
+            } else if (string_equal(ident, string_literal("undef"))) {
+                // handle #undef directive
+            } else if (string_equal(ident, string_literal("if"))) {
+                // handle #if directive
+            } else if (string_equal(ident, string_literal("ifdef"))) {
+                // handle #ifdef directive
+            } else if (string_equal(ident, string_literal("ifndef"))) {
+                // handle conditional directives
+            } else if (string_equal(ident, string_literal("else"))) {
+                // handle #else directive
+            } else if (string_equal(ident, string_literal("elif"))) {
+                // handle #elif directive
+            } else if (string_equal(ident, string_literal("endif"))) {
+                // handle #endif directive
+            } else if (string_equal(ident, string_literal("error"))) {
+                // handle error directive
+            } else if (string_equal(ident, string_literal("pragma"))) {
+                // handle pragma directive
+            } else {
+                // unknown preprocessor directive
+                longjmp(ctx->error_jump, 1);
+            }
+        } else {
+            break;
+        }
+    }
+}
+
 char next(context *ctx) {
-    char c = peek(ctx);
-    ctx->i++;
-    skip_whitespace(ctx);
+    char c = next_with_whitespace(ctx);
+    skip_fluff(ctx);
     return c;
+}
+
+string get_multientry_identifier(context *ctx, char *start, size_t length) {
+    vector str = {0};
+    for (size_t i = 0; i < length; i++) {
+        vector_push(char, &str, start[i]);
+    }
+
+    while (isalnum(peek(ctx))) {
+        vector_push(char, &str, next_with_whitespace(ctx));
+    }
+
+    skip_fluff(ctx);
+    return (string){str.data, str.size};
 }
 
 string get_identifier(context *ctx) {
@@ -173,15 +359,18 @@ string get_identifier(context *ctx) {
         longjmp(ctx->error_jump, 1);
     }
 
-    size_t start = ctx->i;
+    source_entry *entry = ctx->entry;
+    char *start = entry->source.data + entry->i;
+    size_t length = 0;
     while (isalnum(peek(ctx))) {
         next_with_whitespace(ctx);
+        length++;
+        if (ctx->entry != entry)
+            return get_multientry_identifier(ctx, start, length);
     }
-    size_t end = ctx->i;
 
-    skip_whitespace(ctx);
-
-    return (string){ctx->source.data + start, end - start};
+    skip_fluff(ctx);
+    return (string){start, length};
 }
 
 void expect(context *ctx, char c) {
@@ -213,14 +402,14 @@ uint64_t parse_constant(context *ctx) {
                     value = value * 16 + (c - 'A' + 10);
                 }
             }
-            skip_whitespace(ctx);
+            skip_fluff(ctx);
             return value;
         } else {
             uint64_t value = 0;
             while ('0' <= peek(ctx) && peek(ctx) <= '7') {
                 value = value * 8 + (next_with_whitespace(ctx) - '0');
             }
-            skip_whitespace(ctx);
+            skip_fluff(ctx);
             return value;
         }
     } else {
@@ -228,7 +417,7 @@ uint64_t parse_constant(context *ctx) {
         while (isdigit(peek(ctx))) {
             value = value * 10 + (next_with_whitespace(ctx) - '0');
         }
-        skip_whitespace(ctx);
+        skip_fluff(ctx);
         return value;
     }
 }
@@ -726,7 +915,7 @@ uint64_t execute_constant_expression(context *ctx) {
     while (isdigit(peek(ctx))) {
         value = value * 10 + (next_with_whitespace(ctx) - '0');
     }
-    skip_whitespace(ctx);
+    skip_fluff(ctx);
 
     return value;
 }
@@ -1063,17 +1252,17 @@ void parse_external_declaration(context *ctx) {
     }
 }
 
-owned_span compile(string source) {
+owned_span compile(const char *filepath) {
     context ctx;
-    init_context(&ctx, source);
 
     if (setjmp(ctx.error_jump)) {
         // todo: actually communicate information
-        ctx.result.size = -1;
+        ctx.result.size = invalid_length;
     } else {
-        skip_whitespace(&ctx);
+        init_context(&ctx, filepath);
+        skip_fluff(&ctx);
 
-        while (ctx.i < ctx.source.length) {
+        while (ctx.entry) {
             parse_external_declaration(&ctx);
         }
     }

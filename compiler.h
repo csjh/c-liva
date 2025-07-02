@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-owned_span compile(string source);
+owned_span compile(const char *filepath);
 
 typedef enum primitive {
     void_,
@@ -154,17 +154,35 @@ typedef struct alias {
     const type *ty;
 } alias;
 
+typedef struct macro {
+    string name;
+    size_t n_parameters;
+    // these compose a linked list of the macro body
+    /*
+    for something like #define MACRO(a, b) (a) + (b) * (a##b)
+    "(" -> parameters[0] -> ") + (" -> parameters[1] -> ") * (" -> parameters[0]
+    -> parameters[1] -> ")"
+    */
+    source_entry *chunks_head;
+    source_entry *chunks_tail;
+    owned_span parameters;
+} macro;
+
 typedef struct context {
+    const char *filedir;
+    const char *filename;
+
     jmp_buf error_jump;
 
-    string source;
-    size_t i;
+    source_entry *entry;
 
     vector types;
-    alias *structs;
-    alias *unions;
-    alias *enums;
-    alias *typedefs;
+    vector structs;
+    vector unions;
+    vector enums;
+    vector typedefs;
+
+    vector macros;
 
     vector globals;
     vector functions;

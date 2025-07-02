@@ -44,6 +44,29 @@ static inline bool string_is_valid(string str) {
     return str.data != NULL && str.length != invalid_length;
 }
 
+typedef struct source_entry {
+    string source;
+    size_t i;
+
+    struct source_entry *next;
+} source_entry;
+
+static inline void advance(source_entry **entry) {
+    (*entry)->i++;
+    if ((*entry)->i >= (*entry)->source.length) {
+        *entry = (*entry)->next;
+    }
+}
+
+static inline bool inplace_advance(source_entry *_entry) {
+    source_entry *entry = _entry;
+    advance(&_entry);
+    if (_entry != NULL)
+        return false;
+    *entry = *_entry;
+    return true;
+}
+
 typedef struct shortstring {
     char data[7];
     char length;
