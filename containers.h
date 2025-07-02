@@ -9,13 +9,17 @@ typedef struct vector {
     size_t capacity;
 } vector;
 
+static void vector_grow(vector *vec, size_t type_size) {
+    size_t new_capacity = (vec)->capacity ? (vec)->capacity * 2 : 1;
+    (vec)->data = realloc((vec)->data, new_capacity * type_size);
+    (vec)->capacity = new_capacity;
+}
+
 #define vector_at(type, vec, index) ((type *)((vec)->data))[index]
 #define vector_push(type, vec, value)                                          \
     do {                                                                       \
         if ((vec)->size >= (vec)->capacity) {                                  \
-            size_t new_capacity = (vec)->capacity ? (vec)->capacity * 2 : 1;   \
-            (vec)->data = realloc((vec)->data, new_capacity * sizeof(type));   \
-            (vec)->capacity = new_capacity;                                    \
+            vector_grow((vec), sizeof(type));                                  \
         }                                                                      \
         vector_at(type, vec, (vec)->size++) = value;                           \
     } while (0)
