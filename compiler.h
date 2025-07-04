@@ -189,3 +189,12 @@ typedef struct context {
 
     vector result;
 } context;
+
+typedef struct number_literal {
+    bool is_integer;
+    union {
+        uint64_t integer;
+        double fp;
+    };
+} number_literal;
+

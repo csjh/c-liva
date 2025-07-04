@@ -373,6 +373,29 @@ string get_identifier(context *ctx) {
     return (string){start, length};
 }
 
+number_literal get_number(context *ctx) {
+    number_literal literal = {true, 0};
+    while (isdigit(peek(ctx))) {
+        char digit = next_with_whitespace(ctx);
+        literal.integer *= 10;
+        literal.integer += digit - '0';
+    }
+
+    if (peek(ctx) == '.') {
+        literal.is_integer = false;
+        literal.fp = (double)literal.integer;
+        double multiplier = 0.1;
+        while (isdigit(peek(ctx))) {
+            char digit = next_with_whitespace(ctx);
+            literal.fp += (double)(digit - '0') * multiplier;
+            multiplier *= 0.1;
+        }
+    }
+
+    skip_fluff(ctx);
+    return literal;
+}
+
 void expect(context *ctx, char c) {
     if (next(ctx) != c) {
         // expected character
