@@ -396,6 +396,100 @@ number_literal get_number(context *ctx) {
     return literal;
 }
 
+punctuator get_punctuator(context *ctx) {
+    punctuator punc;
+
+#define CHAR(c, i)                                                             \
+    case c:                                                                    \
+        punc = i;                                                              \
+        break;
+
+    switch (peek(ctx)) {
+        CHAR('[', BRACKET_OPEN);
+        CHAR(']', BRACKET_CLOSE);
+        CHAR('(', PAREN_OPEN);
+        CHAR(')', PAREN_CLOSE);
+        CHAR('{', CURLY_OPEN);
+        CHAR('}', CURLY_CLOSE);
+        CHAR('.', DOT);
+        CHAR('&', AND);
+        CHAR('*', STAR);
+        CHAR('+', PLUS);
+        CHAR('-', MINUS);
+        CHAR('~', NOT);
+        CHAR('!', LOGICAL_NOT);
+        CHAR('/', DIV);
+        CHAR('%', REM);
+        CHAR('<', LESS_THAN);
+        CHAR('>', GREATER_THAN);
+        CHAR('^', XOR);
+        CHAR('|', OR);
+        CHAR('?', TERNARY_IF);
+        CHAR(':', COLON);
+        CHAR(';', SEMICOLON);
+        CHAR('=', ASSIGN);
+        CHAR(',', COMMA);
+        CHAR('#', HASH);
+    default:
+        // unexpected character
+        longjmp(ctx->error_jump, 1);
+    }
+#undef CHAR
+
+    next_with_whitespace(ctx);
+
+#define MULTI(c, i)                                                            \
+    if (peek(ctx) == c) {                                                      \
+        punc = i;                                                              \
+        next_with_whitespace(ctx);                                             \
+    }
+
+    if (punc == MINUS) {
+        MULTI('>', ARROW) else MULTI('-', DECREMENT) else MULTI('=', ASSIGN_SUB)
+    } else if (punc == PLUS) {
+        MULTI('+', INCREMENT) else MULTI('=', ASSIGN_ADD)
+    } else if (punc == LESS_THAN) {
+        MULTI('<', LEFT_SHIFT) else MULTI('=', LESS_EQUAL)
+    } else if (punc == GREATER_THAN) {
+        MULTI('>', RIGHT_SHIFT) else MULTI('=', GREATER_EQUAL)
+    } else if (punc == ASSIGN) {
+        MULTI('=', EQUAL_EQUAL)
+    } else if (punc == LOGICAL_NOT) {
+        MULTI('=', NOT_EQUAL)
+    } else if (punc == AND) {
+        MULTI('&', AND_AND) else MULTI('=', ASSIGN_AND)
+    } else if (punc == OR) {
+        MULTI('|', OR_OR) else MULTI('=', ASSIGN_OR)
+    } else if (punc == XOR) {
+        MULTI('=', ASSIGN_XOR)
+    } else if (punc == DIV) {
+        MULTI('=', ASSIGN_DIV)
+    } else if (punc == REM) {
+        MULTI('=', ASSIGN_REM)
+    } else if (punc == STAR) {
+        MULTI('=', ASSIGN_MUL)
+    } else if (punc == HASH) {
+        MULTI('#', HASH_HASH)
+    } else if (punc == DOT) {
+        MULTI('.', PARTIAL_ELLIPSIS)
+    }
+
+    if (punc == PARTIAL_ELLIPSIS) {
+        MULTI('.', ELLIPSIS) else {
+            // expected third dot for ellipsis
+            longjmp(ctx->error_jump, 1);
+        }
+    } else if (punc == LEFT_SHIFT) {
+        MULTI('=', ASSIGN_LEFT_SHIFT)
+    } else if (punc == RIGHT_SHIFT) {
+        MULTI('=', ASSIGN_RIGHT_SHIFT)
+    }
+
+#undef MULTI
+
+    return punc;
+}
+
 void expect(context *ctx, char c) {
     if (next(ctx) != c) {
         // expected character
