@@ -135,8 +135,6 @@ void init_context(context *ctx, const char *filepath) {
     ctx->entry = malloc(sizeof(source_entry));
     *ctx->entry = (source_entry){source, 0, NULL};
 
-    __FILE__;
-
     ctx->types = (vector){0};
     for (int i = 0; i < n_primitive_types; i++) {
         type ty = {0};
