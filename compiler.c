@@ -405,45 +405,43 @@ size_t get_string_literal(context *ctx) {
             if (peek(ctx) == '\\') {
                 next_with_whitespace(ctx);
                 char next_char = next_with_whitespace(ctx);
-                if (next_char == '\'') {
-                    vector_push(char, &ctx->strings, '\'');
-                } else if (next_char == '\"') {
-                    vector_push(char, &ctx->strings, '\"');
-                } else if (next_char == '?') {
-                    vector_push(char, &ctx->strings, '\?');
-                } else if (next_char == '\\') {
-                    vector_push(char, &ctx->strings, '\\');
-                } else if (next_char == 'a') {
-                    vector_push(char, &ctx->strings, '\a');
-                } else if (next_char == 'b') {
-                    vector_push(char, &ctx->strings, '\b');
-                } else if (next_char == 'f') {
-                    vector_push(char, &ctx->strings, '\f');
-                } else if (next_char == 'n') {
-                    vector_push(char, &ctx->strings, '\n');
-                } else if (next_char == 'r') {
-                    vector_push(char, &ctx->strings, '\r');
-                } else if (next_char == 't') {
-                    vector_push(char, &ctx->strings, '\t');
-                } else if (next_char == 'v') {
-                    vector_push(char, &ctx->strings, '\v');
-                } else if ('0' <= next_char && next_char <= '7') {
-                    vector_push(char, &ctx->strings, get_octal(ctx, next_char));
-                } else if (next_char == 'x') {
-                    vector_push(char, &ctx->strings, get_hex(ctx));
-                } else {
+                bool found = false;
+
+                // simple escape sequences
+                char escaped[] = {'\'', '"', '?', '\\', 'a', 'b',
+                                  'f',  'n', 'r', 't',  'v'};
+                for (size_t i = 0; i < sizeof(escaped); i++) {
+                    if (next_char == escaped[i]) {
+                        vector_push(char, &ctx->macho.strings, escaped[i]);
+                        found = true;
+                    }
+                }
+                // octal escape sequence
+                if ('0' <= next_char && next_char <= '7') {
+                    vector_push(char, &ctx->macho.strings,
+                                get_octal(ctx, next_char));
+                    found = true;
+                }
+                // hex escape sequence
+                if (next_char == 'x') {
+                    vector_push(char, &ctx->macho.strings, get_hex(ctx));
+                    found = true;
+                }
+
+                if (!found) {
                     // unknown escape sequence
                     longjmp(ctx->error_jump, 1);
                 }
             } else {
-                vector_push(char, &ctx->strings, next_with_whitespace(ctx));
+                vector_push(char, &ctx->macho.strings,
+                            next_with_whitespace(ctx));
             }
         }
         expect(ctx, '"');
     }
 
     skip_fluff(ctx);
-    return ctx->n_strings++;
+    return ctx->macho.n_strings++;
 }
 
 number_literal get_number(context *ctx) {
