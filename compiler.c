@@ -1,6 +1,9 @@
 #include "./compiler.h"
 #include <ctype.h>
 #include <libgen.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#include <mach-o/reloc.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -153,7 +156,7 @@ void init_context(context *ctx, const char *filepath) {
     ctx->globals = (vector){0};
     ctx->functions = (vector){0};
 
-    ctx->result = (vector){0};
+    ctx->macho = (macho_builder){0};
 }
 
 bool oob_safe_peek(context *ctx, char *c) {
@@ -1403,6 +1406,99 @@ void parse_external_declaration(context *ctx) {
     }
 }
 
+void objectify(macho_builder *macho, FILE *output_file) {
+    size_t segment_start = sizeof(struct mach_header_64) +
+                           sizeof(struct segment_command_64) +
+                           2 * sizeof(struct section_64) +
+                           sizeof(struct symtab_command),
+           code_start = segment_start,
+           string_start = code_start + macho->code.size * sizeof(uint32_t),
+           relocs_start = string_start + macho->strings.size * sizeof(char),
+           symbols_start = relocs_start +
+                           macho->relocs.size * sizeof(struct relocation_info),
+           symbol_names_start =
+               symbols_start + macho->symbols.size * sizeof(struct nlist_64);
+
+    struct mach_header_64 header = {
+        .magic = MH_MAGIC_64,
+        .cputype = CPU_TYPE_ARM64,
+        .cpusubtype = CPU_SUBTYPE_ARM64_ALL,
+        .filetype = MH_OBJECT,
+        .ncmds = 2,
+        .sizeofcmds = sizeof(struct segment_command_64) +
+                      2 * sizeof(struct section_64) +
+                      sizeof(struct symtab_command),
+        .flags = MH_SUBSECTIONS_VIA_SYMBOLS,
+    };
+
+    int nsects = 2; // code section, string section
+    struct segment_command_64 segment = {
+        .cmd = LC_SEGMENT_64,
+        .cmdsize = sizeof(struct segment_command_64) +
+                   nsects * sizeof(struct section_64),
+        .segname = "__TEXT",
+        .vmaddr = 0,
+        .vmsize = 0,
+        .fileoff = segment_start,
+        .filesize = macho->code.size * sizeof(uint32_t) +
+                    macho->strings.size * sizeof(char),
+        .maxprot = VM_PROT_READ | VM_PROT_EXECUTE,
+        .initprot = VM_PROT_READ | VM_PROT_EXECUTE,
+        .nsects = nsects,
+        .flags = 0,
+    };
+
+    struct section_64 code_section = {
+        .sectname = "__text",
+        .segname = "__TEXT",
+        .addr = 0,
+        .size = macho->code.size * sizeof(uint32_t),
+        .offset = code_start,
+        // instructions are 4 bytes
+        .align = sizeof(uint32_t),
+        .reloff = relocs_start,
+        .nreloc = macho->relocs.size,
+        .flags =
+            S_REGULAR | S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS,
+    };
+
+    struct section_64 string_section = {
+        .sectname = "__cstring",
+        .segname = "__TEXT",
+        .addr = code_section.addr + code_section.size,
+        .size = macho->strings.size * sizeof(char),
+        .offset = string_start,
+        // does this impact anything? maybe wide strings?
+        .align = 0,
+        .reloff = 0,
+        .nreloc = 0,
+        .flags = S_CSTRING_LITERALS,
+    };
+
+    struct symtab_command symbol_table_cmd = {
+        .cmd = LC_SYMTAB,
+        .cmdsize = sizeof(struct symtab_command),
+        .symoff = symbols_start,
+        .nsyms = macho->symbols.size,
+        .stroff = symbol_names_start,
+        .strsize = macho->symbol_names.size * sizeof(char)};
+
+    fwrite(&header, sizeof(header), 1, output_file);
+    fwrite(&segment, sizeof(segment), 1, output_file);
+    fwrite(&code_section, sizeof(code_section), 1, output_file);
+    fwrite(&string_section, sizeof(string_section), 1, output_file);
+    fwrite(&symbol_table_cmd, sizeof(symbol_table_cmd), 1, output_file);
+
+    fwrite(macho->code.data, sizeof(uint32_t), macho->code.size, output_file);
+    fwrite(macho->strings.data, sizeof(char), macho->strings.size, output_file);
+    fwrite(macho->relocs.data, sizeof(struct relocation_info),
+           macho->relocs.size, output_file);
+    fwrite(macho->symbols.data, sizeof(struct nlist_64), macho->symbols.size,
+           output_file);
+    fwrite(macho->symbol_names.data, sizeof(char), macho->symbol_names.size,
+           output_file);
+}
+
 bool compile(const char *filepath, FILE *output_file) {
     context ctx;
 
@@ -1417,6 +1513,7 @@ bool compile(const char *filepath, FILE *output_file) {
             parse_external_declaration(&ctx);
         }
 
+        objectify(&ctx.macho, output_file);
 
         return true;
     }

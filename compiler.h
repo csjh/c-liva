@@ -169,6 +169,15 @@ typedef struct macro {
     owned_span parameters;
 } macro;
 
+typedef struct macho_builder {
+    size_t n_strings;
+    vector strings;
+    vector code;
+    vector relocs;
+    vector symbols;
+    vector symbol_names;
+} macho_builder;
+
 typedef struct context {
     const char *filedir;
     const char *filename;
@@ -188,7 +197,7 @@ typedef struct context {
     vector globals;
     vector functions;
 
-    vector result;
+    macho_builder macho;
 } context;
 
 typedef struct number_literal {
