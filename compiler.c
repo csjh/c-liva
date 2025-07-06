@@ -339,13 +339,16 @@ char next(context *ctx) {
     return c;
 }
 
+bool isidentfirst(char c) { return isalpha(c) || c == '_' || c == '$'; }
+bool isident(char c) { return isidentfirst(c) || isdigit(c); }
+
 string get_multientry_identifier(context *ctx, char *start, size_t length) {
     vector str = {0};
     for (size_t i = 0; i < length; i++) {
         vector_push(char, &str, start[i]);
     }
 
-    while (isalnum(peek(ctx))) {
+    while (isident(peek(ctx))) {
         vector_push(char, &str, next_with_whitespace(ctx));
     }
 
@@ -354,15 +357,10 @@ string get_multientry_identifier(context *ctx, char *start, size_t length) {
 }
 
 string get_identifier(context *ctx) {
-    if (!isalpha(peek(ctx))) {
-        // expected identifier
-        longjmp(ctx->error_jump, 1);
-    }
-
     source_entry *entry = ctx->entry;
     char *start = entry->source.data + entry->i;
     size_t length = 0;
-    while (isalnum(peek(ctx))) {
+    while (isident(peek(ctx))) {
         next_with_whitespace(ctx);
         length++;
         if (ctx->entry != entry)
@@ -371,6 +369,80 @@ string get_identifier(context *ctx) {
 
     skip_fluff(ctx);
     return (string){start, length};
+}
+
+char get_octal(context *ctx, char first) {
+    char value = first - '0';
+    for (int i = 0; i < 2; i++)
+        if ('0' <= peek(ctx) && peek(ctx) <= '7')
+            value = (value * 010) | (next_with_whitespace(ctx) - '0');
+    return (char)value;
+}
+
+char get_hex(context *ctx) {
+    char value = 0;
+    while (isxdigit(peek(ctx))) {
+        char digit = next_with_whitespace(ctx);
+        if ('0' <= digit && digit <= '9') {
+            value = (value * 0x10) | (digit - '0');
+        } else if ('a' <= digit && digit <= 'f') {
+            value = (value * 0x10) | (digit - 'a' + 10);
+        } else if ('A' <= digit && digit <= 'F') {
+            value = (value * 0x10) | (digit - 'A' + 10);
+        } else {
+            // invalid hex character
+            longjmp(ctx->error_jump, 1);
+        }
+    }
+    return value;
+}
+
+size_t get_string_literal(context *ctx) {
+    while (peek(ctx) == '"') {
+        next_with_whitespace(ctx);
+        while (peek(ctx) != '"' && peek(ctx) != '\n') {
+            if (peek(ctx) == '\\') {
+                next_with_whitespace(ctx);
+                char next_char = next_with_whitespace(ctx);
+                if (next_char == '\'') {
+                    vector_push(char, &ctx->strings, '\'');
+                } else if (next_char == '\"') {
+                    vector_push(char, &ctx->strings, '\"');
+                } else if (next_char == '?') {
+                    vector_push(char, &ctx->strings, '\?');
+                } else if (next_char == '\\') {
+                    vector_push(char, &ctx->strings, '\\');
+                } else if (next_char == 'a') {
+                    vector_push(char, &ctx->strings, '\a');
+                } else if (next_char == 'b') {
+                    vector_push(char, &ctx->strings, '\b');
+                } else if (next_char == 'f') {
+                    vector_push(char, &ctx->strings, '\f');
+                } else if (next_char == 'n') {
+                    vector_push(char, &ctx->strings, '\n');
+                } else if (next_char == 'r') {
+                    vector_push(char, &ctx->strings, '\r');
+                } else if (next_char == 't') {
+                    vector_push(char, &ctx->strings, '\t');
+                } else if (next_char == 'v') {
+                    vector_push(char, &ctx->strings, '\v');
+                } else if ('0' <= next_char && next_char <= '7') {
+                    vector_push(char, &ctx->strings, get_octal(ctx, next_char));
+                } else if (next_char == 'x') {
+                    vector_push(char, &ctx->strings, get_hex(ctx));
+                } else {
+                    // unknown escape sequence
+                    longjmp(ctx->error_jump, 1);
+                }
+            } else {
+                vector_push(char, &ctx->strings, next_with_whitespace(ctx));
+            }
+        }
+        expect(ctx, '"');
+    }
+
+    skip_fluff(ctx);
+    return ctx->n_strings++;
 }
 
 number_literal get_number(context *ctx) {
@@ -503,42 +575,6 @@ value parse_cast_expression(context *ctx);
 
 const type *parse_type_name(context *ctx) { return NULL; }
 
-uint64_t parse_constant(context *ctx) {
-    if (peek(ctx) == '0') {
-        next(ctx);
-        if (peek(ctx) == 'x' || peek(ctx) == 'X') {
-            next(ctx);
-            uint64_t value = 0;
-            while (isxdigit(peek(ctx))) {
-                char c = next_with_whitespace(ctx);
-                if (isdigit(c)) {
-                    value = value * 16 + (c - '0');
-                } else if (c >= 'a' && c <= 'f') {
-                    value = value * 16 + (c - 'a' + 10);
-                } else if (c >= 'A' && c <= 'F') {
-                    value = value * 16 + (c - 'A' + 10);
-                }
-            }
-            skip_fluff(ctx);
-            return value;
-        } else {
-            uint64_t value = 0;
-            while ('0' <= peek(ctx) && peek(ctx) <= '7') {
-                value = value * 8 + (next_with_whitespace(ctx) - '0');
-            }
-            skip_fluff(ctx);
-            return value;
-        }
-    } else {
-        uint64_t value = 0;
-        while (isdigit(peek(ctx))) {
-            value = value * 10 + (next_with_whitespace(ctx) - '0');
-        }
-        skip_fluff(ctx);
-        return value;
-    }
-}
-
 value parse_primary_expression(context *ctx) {
     if (isalpha(peek(ctx))) {
         // identifier / enum constant / generic
@@ -550,9 +586,9 @@ value parse_primary_expression(context *ctx) {
             // don't forget enums
         }
         return (value){};
-    } else if ('0' <= peek(ctx) && peek(ctx) <= '9') {
+    } else if (isdigit(peek(ctx)) || peek(ctx) == '.') {
         // integer / floating constant
-        uint64_t constant = parse_constant(ctx);
+        number_literal constant = get_number(ctx);
         return (value){};
     } else if (peek(ctx) == '"') {
         // string literal
