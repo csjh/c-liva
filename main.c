@@ -1,6 +1,5 @@
 #include "./compiler.h"
 #include <stdio.h>
-#include <stdlib.h>
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -12,12 +11,6 @@ int main(int argc, char *argv[]) {
     char path[1024] = {0};
     realpath(source_file, path);
 
-    owned_span object_code = compile(path);
-    if (object_code.size == invalid_length) {
-        fprintf(stderr, "Compilation failed\n");
-        return 1;
-    }
-
     const char *output_file = argv[2];
     FILE *output_fp = fopen(output_file, "w");
     if (!output_fp) {
@@ -25,10 +18,13 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    fwrite(object_code.data, object_code.size, 1, output_fp);
+    if (!compile(path, output_fp)) {
+        fprintf(stderr, "Compilation failed\n");
+        fclose(output_fp);
+        return 1;
+    }
 
+    printf("Compilation successful, output written to %s\n", output_file);
     fclose(output_fp);
-    free(object_code.data);
-
     return 0;
 }

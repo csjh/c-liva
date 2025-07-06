@@ -1405,12 +1405,12 @@ void parse_external_declaration(context *ctx) {
     }
 }
 
-owned_span compile(const char *filepath) {
+bool compile(const char *filepath, FILE *output_file) {
     context ctx;
 
     if (setjmp(ctx.error_jump)) {
         // todo: actually communicate information
-        ctx.result.size = invalid_length;
+        return false;
     } else {
         init_context(&ctx, filepath);
         skip_fluff(&ctx);
@@ -1418,7 +1418,8 @@ owned_span compile(const char *filepath) {
         while (ctx.entry) {
             parse_external_declaration(&ctx);
         }
-    }
 
-    return owned_span_from_vector(ctx.result);
+
+        return true;
+    }
 }

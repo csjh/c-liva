@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
-owned_span compile(const char *filepath);
+bool compile(const char *filepath, FILE *output_file);
 
 typedef enum primitive {
     void_,
