@@ -178,27 +178,76 @@ typedef struct macho_builder {
     vector symbol_names;
 } macho_builder;
 
-typedef struct context {
-    const char *filedir;
-    const char *filename;
+static const string keyword_names[] = {
+    string_literal("auto"),           string_literal("if"),
+    string_literal("unsigned"),       string_literal("break"),
+    string_literal("inline"),         string_literal("void"),
+    string_literal("case"),           string_literal("int"),
+    string_literal("volatile"),       string_literal("char"),
+    string_literal("long"),           string_literal("while"),
+    string_literal("const"),          string_literal("register"),
+    string_literal("_Alignas"),       string_literal("continue"),
+    string_literal("restrict"),       string_literal("_Alignof"),
+    string_literal("default"),        string_literal("return"),
+    string_literal("_Atomic"),        string_literal("do"),
+    string_literal("short"),          string_literal("_Bool"),
+    string_literal("double"),         string_literal("signed"),
+    string_literal("_Complex"),       string_literal("else"),
+    string_literal("sizeof"),         string_literal("_Generic"),
+    string_literal("enum"),           string_literal("static"),
+    string_literal("_Imaginary"),     string_literal("extern"),
+    string_literal("struct"),         string_literal("_Noreturn"),
+    string_literal("float"),          string_literal("switch"),
+    string_literal("_Static_assert"), string_literal("for"),
+    string_literal("typedef"),        string_literal("_Thread_local"),
+    string_literal("goto"),           string_literal("union")};
 
-    jmp_buf error_jump;
-
-    source_entry *entry;
-
-    vector types;
-    vector structs;
-    vector unions;
-    vector enums;
-    vector typedefs;
-
-    vector macros;
-
-    vector globals;
-    vector functions;
-
-    macho_builder macho;
-} context;
+typedef enum keyword {
+    auto_kw,
+    if_kw,
+    unsigned_kw,
+    break_kw,
+    inline_kw,
+    void_kw,
+    case_kw,
+    int_kw,
+    volatile_kw,
+    char_kw,
+    long_kw,
+    while_kw,
+    const_kw,
+    register_kw,
+    _Alignas_kw,
+    continue_kw,
+    restrict_kw,
+    _Alignof_kw,
+    default_kw,
+    return_kw,
+    _Atomic_kw,
+    do_kw,
+    short_kw,
+    _Bool_kw,
+    double_kw,
+    signed_kw,
+    _Complex_kw,
+    else_kw,
+    sizeof_kw,
+    _Generic_kw,
+    enum_kw,
+    static_kw,
+    _Imaginary_kw,
+    extern_kw,
+    struct_kw,
+    _Noreturn_kw,
+    float_kw,
+    switch_kw,
+    _Static_assert_kw,
+    for_kw,
+    typedef_kw,
+    _Thread_local_kw,
+    goto_kw,
+    union_kw,
+} keyword;
 
 typedef struct number_literal {
     bool is_integer;
@@ -208,7 +257,41 @@ typedef struct number_literal {
     };
 } number_literal;
 
+typedef enum width {
+    regular,
+    utf8,
+    utf16,
+    utf32,
+    wchar,
+} width;
+
+typedef struct string_literal {
+    string str;
+    width w;
+} string_literal;
+
+static const string punctuator_names[] = {
+    invalid_str,           string_literal("["),   string_literal("]"),
+    string_literal("("),   string_literal(")"),   string_literal("{"),
+    string_literal("}"),   string_literal("."),   string_literal("->"),
+    string_literal("++"),  string_literal("--"),  string_literal("&"),
+    string_literal("*"),   string_literal("+"),   string_literal("-"),
+    string_literal("!"),   string_literal("~"),   string_literal("/"),
+    string_literal("%"),   string_literal("<<"),  string_literal(">>"),
+    string_literal("<"),   string_literal(">"),   string_literal("<="),
+    string_literal(">="),  string_literal("=="),  string_literal("!="),
+    string_literal("^"),   string_literal("|"),   string_literal("&&"),
+    string_literal("||"),  string_literal("?"),   string_literal(":"),
+    string_literal(";"),   string_literal(".."),  string_literal("..."),
+    string_literal("="),   string_literal("*="),  string_literal("/="),
+    string_literal("%="),  string_literal("+="),  string_literal("-="),
+    string_literal("<<="), string_literal(">>="), string_literal("&="),
+    string_literal("^="),  string_literal("|="),  string_literal(","),
+    string_literal("#"),   string_literal("##"),
+};
+
 typedef enum punctuator {
+    INVALID,
     BRACKET_OPEN,
     BRACKET_CLOSE,
     PAREN_OPEN,
@@ -233,7 +316,7 @@ typedef enum punctuator {
     GREATER_THAN,
     LESS_EQUAL,
     GREATER_EQUAL,
-    EQUAL_EQUAL,
+    EQUAL,
     NOT_EQUAL,
     XOR,
     OR,
@@ -261,3 +344,50 @@ typedef enum punctuator {
     // support digraphs?
 } punctuator;
 
+typedef struct token {
+    enum {
+        TOKEN_EOF,
+        TOKEN_KEYWORD,
+        TOKEN_IDENTIFIER,
+        TOKEN_NUMBER,
+        TOKEN_STRING,
+        TOKEN_PUNCTUATOR,
+    } type;
+    union {
+        keyword kw;
+        string ident;
+        number_literal num;
+        string_literal str;
+        punctuator punc;
+    };
+} token;
+
+typedef struct enum_value {
+    string name;
+    uint64_t value;
+} enum_value;
+
+typedef struct context {
+    const char *filedir;
+    const char *filename;
+
+    jmp_buf error_jump;
+
+    source_entry *entry;
+    token tokens[2];
+
+    vector types;
+    vector structs;
+    vector unions;
+    vector enums;
+    vector typedefs;
+
+    vector macros;
+
+    vector globals;
+    vector functions;
+
+    vector enum_values;
+
+    macho_builder macho;
+} context;

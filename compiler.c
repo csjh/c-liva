@@ -108,6 +108,33 @@ void print_type(const type *ty) {
     }
 }
 
+void print_token(token tok) {
+    switch (tok.type) {
+    case TOKEN_EOF:
+        printf("EOF\n");
+        break;
+    case TOKEN_KEYWORD:
+        printf("keyword %.*s\n", (int)keyword_names[tok.kw].length,
+               keyword_names[tok.kw].data);
+        break;
+    case TOKEN_IDENTIFIER:
+        printf("identifier %.*s\n", (int)tok.ident.length, tok.ident.data);
+        break;
+    case TOKEN_NUMBER:
+        printf("number %lld\n", tok.num.integer);
+        break;
+    case TOKEN_STRING:
+        printf("string %.*s\n", (int)tok.str.str.length, tok.str.str.data);
+        break;
+    case TOKEN_PUNCTUATOR:
+        printf("punctuator %.*s\n", (int)punctuator_names[tok.punc].length,
+               punctuator_names[tok.punc].data);
+        break;
+    }
+}
+
+token read_token(context *ctx);
+
 void init_context(context *ctx, const char *filepath) {
     FILE *source_fp = fopen(filepath, "r");
     if (!source_fp) {
@@ -156,7 +183,12 @@ void init_context(context *ctx, const char *filepath) {
     ctx->globals = (vector){0};
     ctx->functions = (vector){0};
 
+    ctx->enum_values = (vector){0};
+
     ctx->macho = (macho_builder){0};
+
+    ctx->tokens[0] = read_token(ctx);
+    ctx->tokens[1] = read_token(ctx);
 }
 
 bool oob_safe_peek(context *ctx, char *c) {
@@ -167,7 +199,7 @@ bool oob_safe_peek(context *ctx, char *c) {
     return true;
 }
 
-char peek(context *ctx) {
+char peek_char(context *ctx) {
     char c;
     if (!oob_safe_peek(ctx, &c)) {
         // unexpected end of input
@@ -176,69 +208,34 @@ char peek(context *ctx) {
     return c;
 }
 
-shortstring multipeek(context *ctx, size_t n) {
-    source_entry entry = *ctx->entry;
-    shortstring result = {0};
-    size_t i = 0;
-    for (; i < n; i++) {
-        result.data[i] = entry.source.data[entry.i];
-        if (!inplace_advance(&entry))
-            break;
-    }
-    result.length = i;
-    return result;
-}
-
-char next_with_whitespace(context *ctx) {
-    char c = peek(ctx);
+char next_char(context *ctx) {
+    char c = peek_char(ctx);
     advance(&ctx->entry);
     return c;
 }
 
-void skip_whitespace(context *ctx) {
+void expect_char(context *ctx, char c) {
+    if (next_char(ctx) != c) {
+        // expected character
+        longjmp(ctx->error_jump, 1);
+    }
+}
+
+bool skip_whitespace(context *ctx) {
     char c;
-    while (oob_safe_peek(ctx, &c) && isspace(c)) {
-        next_with_whitespace(ctx);
+    bool newline = false;
+    while (oob_safe_peek(ctx, &c)) {
+        if (isspace(c)) {
+            next_char(ctx);
+            newline |= c == '\n';
+        } else if (c == '\\') {
+            next_char(ctx);
+            expect_char(ctx, '\n');
+        } else {
+            break;
+        }
     }
-}
-
-string get_identifier(context *ctx);
-void expect(context *ctx, char c);
-
-string get_multientry_header_file(context *ctx, char delimiter, char *start,
-                                  size_t length) {
-    vector str = {0};
-    for (size_t i = 0; i < length; i++) {
-        vector_push(char, &str, start[i]);
-    }
-
-    while (peek(ctx) != delimiter && peek(ctx) != '\n') {
-        vector_push(char, &str, next_with_whitespace(ctx));
-    }
-    if (peek(ctx) == '\n') {
-        // unterminated header file
-        longjmp(ctx->error_jump, 1);
-    }
-
-    return (string){str.data, str.size};
-}
-
-string get_header_file(context *ctx, char delimiter) {
-    source_entry *entry = ctx->entry;
-    char *start = entry->source.data + entry->i;
-    size_t length = 0;
-    while (peek(ctx) != delimiter && peek(ctx) != '\n') {
-        next_with_whitespace(ctx);
-        length++;
-        if (ctx->entry != entry)
-            return get_multientry_header_file(ctx, delimiter, start, length);
-    }
-    if (peek(ctx) == '\n') {
-        // unterminated header file
-        longjmp(ctx->error_jump, 1);
-    }
-
-    return (string){start, length};
+    return newline;
 }
 
 string resolve_file(context *ctx, string filename, bool resolve_local) {
@@ -271,75 +268,6 @@ void insert_entry(context *ctx, string contents) {
     ctx->entry = new_entry;
 }
 
-void skip_fluff(context *ctx) {
-    bool preprocessor_eligible = false;
-    char c;
-    while (oob_safe_peek(ctx, &c)) {
-        if (isspace(c)) {
-            if (c == '\n')
-                preprocessor_eligible = true;
-            next_with_whitespace(ctx);
-        } else if (preprocessor_eligible && c == '#') {
-            next_with_whitespace(ctx);
-            while (oob_safe_peek(ctx, &c) && c == ' ') {
-                next_with_whitespace(ctx);
-            }
-            string ident = get_identifier(ctx);
-            if (string_equal(ident, string_literal("include"))) {
-                string filename;
-                bool resolve_local;
-                if (peek(ctx) == '<') {
-                    next_with_whitespace(ctx);
-                    filename = get_header_file(ctx, '>');
-                    expect(ctx, '>');
-                    resolve_local = false;
-                } else if (peek(ctx) == '"') {
-                    next_with_whitespace(ctx);
-                    filename = get_header_file(ctx, '"');
-                    expect(ctx, '"');
-                    resolve_local = true;
-                } else {
-                    // expected include directive
-                    longjmp(ctx->error_jump, 1);
-                }
-                string contents = resolve_file(ctx, filename, resolve_local);
-                insert_entry(ctx, contents);
-            } else if (string_equal(ident, string_literal("define"))) {
-                // handle #define directive
-            } else if (string_equal(ident, string_literal("undef"))) {
-                // handle #undef directive
-            } else if (string_equal(ident, string_literal("if"))) {
-                // handle #if directive
-            } else if (string_equal(ident, string_literal("ifdef"))) {
-                // handle #ifdef directive
-            } else if (string_equal(ident, string_literal("ifndef"))) {
-                // handle conditional directives
-            } else if (string_equal(ident, string_literal("else"))) {
-                // handle #else directive
-            } else if (string_equal(ident, string_literal("elif"))) {
-                // handle #elif directive
-            } else if (string_equal(ident, string_literal("endif"))) {
-                // handle #endif directive
-            } else if (string_equal(ident, string_literal("error"))) {
-                // handle error directive
-            } else if (string_equal(ident, string_literal("pragma"))) {
-                // handle pragma directive
-            } else {
-                // unknown preprocessor directive
-                longjmp(ctx->error_jump, 1);
-            }
-        } else {
-            break;
-        }
-    }
-}
-
-char next(context *ctx) {
-    char c = next_with_whitespace(ctx);
-    skip_fluff(ctx);
-    return c;
-}
-
 bool isidentfirst(char c) { return isalpha(c) || c == '_' || c == '$'; }
 bool isident(char c) { return isidentfirst(c) || isdigit(c); }
 
@@ -349,11 +277,10 @@ string get_multientry_identifier(context *ctx, char *start, size_t length) {
         vector_push(char, &str, start[i]);
     }
 
-    while (isident(peek(ctx))) {
-        vector_push(char, &str, next_with_whitespace(ctx));
+    while (isident(peek_char(ctx))) {
+        vector_push(char, &str, next_char(ctx));
     }
 
-    skip_fluff(ctx);
     return (string){str.data, str.size};
 }
 
@@ -361,29 +288,28 @@ string get_identifier(context *ctx) {
     source_entry *entry = ctx->entry;
     char *start = entry->source.data + entry->i;
     size_t length = 0;
-    while (isident(peek(ctx))) {
-        next_with_whitespace(ctx);
+    while (isident(peek_char(ctx))) {
+        next_char(ctx);
         length++;
         if (ctx->entry != entry)
             return get_multientry_identifier(ctx, start, length);
     }
 
-    skip_fluff(ctx);
     return (string){start, length};
 }
 
 char get_octal(context *ctx, char first) {
     char value = first - '0';
     for (int i = 0; i < 2; i++)
-        if ('0' <= peek(ctx) && peek(ctx) <= '7')
-            value = (value * 010) | (next_with_whitespace(ctx) - '0');
+        if ('0' <= peek_char(ctx) && peek_char(ctx) <= '7')
+            value = (value * 010) | (next_char(ctx) - '0');
     return (char)value;
 }
 
 char get_hex(context *ctx) {
     char value = 0;
-    while (isxdigit(peek(ctx))) {
-        char digit = next_with_whitespace(ctx);
+    while (isxdigit(peek_char(ctx))) {
+        char digit = next_char(ctx);
         if ('0' <= digit && digit <= '9') {
             value = (value * 0x10) | (digit - '0');
         } else if ('a' <= digit && digit <= 'f') {
@@ -398,84 +324,88 @@ char get_hex(context *ctx) {
     return value;
 }
 
-size_t get_string_literal(context *ctx) {
-    while (peek(ctx) == '"') {
-        next_with_whitespace(ctx);
-        while (peek(ctx) != '"' && peek(ctx) != '\n') {
-            if (peek(ctx) == '\\') {
-                next_with_whitespace(ctx);
-                char next_char = next_with_whitespace(ctx);
-                bool found = false;
+char get_quoted_char(context *ctx) {
+    if (peek_char(ctx) == '\\') {
+        next_char(ctx);
+        char c = next_char(ctx);
 
-                // simple escape sequences
-                char escaped[] = {'\'', '"', '?', '\\', 'a', 'b',
-                                  'f',  'n', 'r', 't',  'v'};
-                for (size_t i = 0; i < sizeof(escaped); i++) {
-                    if (next_char == escaped[i]) {
-                        vector_push(char, &ctx->macho.strings, escaped[i]);
-                        found = true;
-                    }
-                }
-                // octal escape sequence
-                if ('0' <= next_char && next_char <= '7') {
-                    vector_push(char, &ctx->macho.strings,
-                                get_octal(ctx, next_char));
-                    found = true;
-                }
-                // hex escape sequence
-                if (next_char == 'x') {
-                    vector_push(char, &ctx->macho.strings, get_hex(ctx));
-                    found = true;
-                }
-
-                if (!found) {
-                    // unknown escape sequence
-                    longjmp(ctx->error_jump, 1);
-                }
-            } else {
-                vector_push(char, &ctx->macho.strings,
-                            next_with_whitespace(ctx));
+        // simple escape sequences
+        char escaped[] = {'\'', '"', '?', '\\', 'a', 'b',
+                          'f',  'n', 'r', 't',  'v'};
+        for (size_t i = 0; i < sizeof(escaped); i++) {
+            if (c == escaped[i]) {
+                return escaped[i];
             }
         }
-        expect(ctx, '"');
+        // octal escape sequence
+        if ('0' <= c && c <= '7') {
+            return get_octal(ctx, c);
+        }
+        // hex escape sequence
+        if (c == 'x') {
+            return get_hex(ctx);
+        }
+
+        // unknown escape sequence
+        longjmp(ctx->error_jump, 1);
+    } else {
+        return next_char(ctx);
+    }
+}
+
+int get_char_constant(context *ctx) { return get_quoted_char(ctx); }
+
+string_literal get_string_literal(context *ctx) {
+    string_literal str = {0};
+
+    vector s = {0};
+    while (peek_char(ctx) == '"') {
+        next_char(ctx);
+        while (peek_char(ctx) != '"' && peek_char(ctx) != '\n') {
+            vector_push(char, &s, get_quoted_char(ctx));
+        }
+        if (next_char(ctx) != '"') {
+            // expected ending bracket
+            longjmp(ctx->error_jump, 1);
+        }
     }
 
-    skip_fluff(ctx);
-    return ctx->macho.n_strings++;
+    str.w = regular;
+    str.str = (string){s.data, s.size};
+    return str;
 }
 
 number_literal get_number(context *ctx) {
     number_literal literal = {true, 0};
-    while (isdigit(peek(ctx))) {
-        char digit = next_with_whitespace(ctx);
+    while (isdigit(peek_char(ctx))) {
+        char digit = next_char(ctx);
         literal.integer *= 10;
         literal.integer += digit - '0';
     }
 
-    if (peek(ctx) == '.') {
+    if (peek_char(ctx) == '.') {
         literal.is_integer = false;
         literal.fp = (double)literal.integer;
         double multiplier = 0.1;
-        while (isdigit(peek(ctx))) {
-            char digit = next_with_whitespace(ctx);
+        while (isdigit(peek_char(ctx))) {
+            char digit = next_char(ctx);
             literal.fp += (double)(digit - '0') * multiplier;
             multiplier *= 0.1;
         }
     }
 
-    skip_fluff(ctx);
     return literal;
 }
 
 punctuator get_punctuator(context *ctx) {
-    punctuator punc;
+    punctuator punc = INVALID;
 
 #define CHAR(c, i)                                                             \
     case c:                                                                    \
         punc = i;                                                              \
         break;
 
-    switch (peek(ctx)) {
+    switch (peek_char(ctx)) {
         CHAR('[', BRACKET_OPEN);
         CHAR(']', BRACKET_CLOSE);
         CHAR('(', PAREN_OPEN);
@@ -507,12 +437,12 @@ punctuator get_punctuator(context *ctx) {
     }
 #undef CHAR
 
-    next_with_whitespace(ctx);
+    next_char(ctx);
 
 #define MULTI(c, i)                                                            \
-    if (peek(ctx) == c) {                                                      \
+    if (peek_char(ctx) == c) {                                                 \
         punc = i;                                                              \
-        next_with_whitespace(ctx);                                             \
+        next_char(ctx);                                                        \
     }
 
     if (punc == MINUS) {
@@ -524,7 +454,7 @@ punctuator get_punctuator(context *ctx) {
     } else if (punc == GREATER_THAN) {
         MULTI('>', RIGHT_SHIFT) else MULTI('=', GREATER_EQUAL)
     } else if (punc == ASSIGN) {
-        MULTI('=', EQUAL_EQUAL)
+        MULTI('=', EQUAL)
     } else if (punc == LOGICAL_NOT) {
         MULTI('=', NOT_EQUAL)
     } else if (punc == AND) {
@@ -561,9 +491,207 @@ punctuator get_punctuator(context *ctx) {
     return punc;
 }
 
-void expect(context *ctx, char c) {
-    if (next(ctx) != c) {
-        // expected character
+string get_multientry_header_file(context *ctx, char delimiter, char *start,
+                                  size_t length) {
+    vector str = {0};
+    for (size_t i = 0; i < length; i++) {
+        vector_push(char, &str, start[i]);
+    }
+
+    while (peek_char(ctx) != delimiter && peek_char(ctx) != '\n') {
+        vector_push(char, &str, next_char(ctx));
+    }
+    if (peek_char(ctx) == '\n') {
+        // unterminated header file
+        longjmp(ctx->error_jump, 1);
+    }
+
+    return (string){str.data, str.size};
+}
+
+string get_header_file(context *ctx, char delimiter) {
+    source_entry *entry = ctx->entry;
+    char *start = entry->source.data + entry->i;
+    size_t length = 0;
+    while (peek_char(ctx) != delimiter && peek_char(ctx) != '\n') {
+        next_char(ctx);
+        length++;
+        if (ctx->entry != entry)
+            return get_multientry_header_file(ctx, delimiter, start, length);
+    }
+    if (peek_char(ctx) == '\n') {
+        // unterminated header file
+        longjmp(ctx->error_jump, 1);
+    }
+
+    return (string){start, length};
+}
+
+void do_define(context *ctx) { /* todo */
+}
+
+void do_undef(context *ctx) {
+    string name = get_identifier(ctx);
+    for (int i = 0; i < ctx->macros.size; i++) {
+        macro m = vector_at(macro, &ctx->macros, i);
+        if (string_equal(m.name, name)) {
+            vector_remove(macro, &ctx->macros, i);
+            break;
+        }
+    }
+    macro mac = {.name = name};
+}
+
+token read_token(context *ctx) {
+    token t;
+
+    bool directive_eligible = skip_whitespace(ctx);
+    if (ctx->entry == NULL) {
+        t.type = TOKEN_EOF;
+        t.ident = invalid_str;
+    } else if (directive_eligible && peek_char(ctx) == '#') {
+        // preprocessor directive
+        next_char(ctx);
+        string directive = get_identifier(ctx);
+
+        if (string_equal(directive, string_literal("include"))) {
+            while (peek_char(ctx) == ' ')
+                next_char(ctx);
+
+            string filename;
+            bool resolve_local;
+            if (peek_char(ctx) == '<') {
+                next_char(ctx);
+                filename = get_header_file(ctx, '>');
+                expect_char(ctx, '>');
+                resolve_local = false;
+            } else if (peek_char(ctx) == '"') {
+                next_char(ctx);
+                filename = get_header_file(ctx, '"');
+                expect_char(ctx, '"');
+                resolve_local = true;
+            } else {
+                // expected include directive
+                longjmp(ctx->error_jump, 1);
+            }
+            string contents = resolve_file(ctx, filename, resolve_local);
+            insert_entry(ctx, contents);
+        } else if (string_equal(directive, string_literal("define"))) {
+            do_define(ctx);
+        } else if (string_equal(directive, string_literal("undef"))) {
+            do_undef(ctx);
+        } else if (string_equal(directive, string_literal("if"))) {
+            // handle #if directive
+        } else if (string_equal(directive, string_literal("ifdef"))) {
+            // handle #ifdef directive
+        } else if (string_equal(directive, string_literal("ifndef"))) {
+            // handle conditional directives
+        } else if (string_equal(directive, string_literal("else"))) {
+            // handle #else directive
+        } else if (string_equal(directive, string_literal("elif"))) {
+            // handle #elif directive
+        } else if (string_equal(directive, string_literal("endif"))) {
+            // handle #endif directive
+        } else if (string_equal(directive, string_literal("error"))) {
+            // show the error message
+            longjmp(ctx->error_jump, 1);
+        } else if (string_equal(directive, string_literal("pragma"))) {
+            // handle pragma directive
+        } else {
+            // unknown preprocessor directive
+            longjmp(ctx->error_jump, 1);
+        }
+
+        return read_token(ctx);
+    } else if (isdigit(peek_char(ctx))) {
+        t.type = TOKEN_NUMBER;
+        t.num = get_number(ctx);
+    } else if (peek_char(ctx) == '"') {
+        t.type = TOKEN_STRING;
+        t.str = get_string_literal(ctx);
+    } else if (peek_char(ctx) == '\'') {
+        t.type = TOKEN_NUMBER;
+        t.num.is_integer = true;
+        t.num.integer = get_char_constant(ctx);
+    } else if (isidentfirst(peek_char(ctx))) {
+        string ident = get_identifier(ctx);
+        for (int i = 0; i < ctx->macros.size; i++) {
+            macro m = vector_at(macro, &ctx->macros, i);
+            if (string_equal(m.name, ident)) {
+                /* handle it somehow */
+            }
+        }
+        for (int i = 0; i < array_length(keyword_names); i++) {
+            if (string_equal(ident, keyword_names[i])) {
+                t.type = TOKEN_KEYWORD;
+                t.kw = i;
+                return t;
+            }
+        }
+        for (int i = 0; i < ctx->enum_values.size; i++) {
+            enum_value ev = vector_at(enum_value, &ctx->enum_values, i);
+            if (string_equal(ident, ev.name)) {
+                t.type = TOKEN_NUMBER;
+                t.num.is_integer = true;
+                t.num.integer = ev.value;
+                return t;
+            }
+        }
+        t.type = TOKEN_IDENTIFIER;
+        t.ident = ident;
+    } else {
+        t.type = TOKEN_PUNCTUATOR;
+        t.punc = get_punctuator(ctx);
+    }
+
+    return t;
+}
+
+token peek(context *ctx) { return ctx->tokens[0]; }
+token peek2(context *ctx) { return ctx->tokens[1]; }
+
+token next(context *ctx) {
+    token t = peek(ctx);
+    ctx->tokens[0] = peek2(ctx);
+    ctx->tokens[1] = read_token(ctx);
+    return t;
+}
+
+bool soft_check_punc(context *ctx, punctuator punc) {
+    token tok = peek(ctx);
+    if (tok.type == TOKEN_PUNCTUATOR && tok.punc == punc) {
+        return true;
+    }
+    return false;
+}
+
+bool check_punc(context *ctx, punctuator punc) {
+    if (soft_check_punc(ctx, punc)) {
+        next(ctx);
+        return true;
+    }
+    return false;
+}
+
+void expect_punc(context *ctx, punctuator punc) {
+    if (!check_punc(ctx, punc)) {
+        // expected punctuator
+        longjmp(ctx->error_jump, 1);
+    }
+}
+
+bool check_keyword(context *ctx, keyword kw) {
+    token tok = peek(ctx);
+    if (tok.type == TOKEN_KEYWORD && tok.kw == kw) {
+        next(ctx);
+        return true;
+    }
+    return false;
+}
+
+void expect_keyword(context *ctx, keyword kw) {
+    if (!check_keyword(ctx, kw)) {
+        // expected keyword
         longjmp(ctx->error_jump, 1);
     }
 }
@@ -575,36 +703,27 @@ value parse_cast_expression(context *ctx);
 const type *parse_type_name(context *ctx) { return NULL; }
 
 value parse_primary_expression(context *ctx) {
-    if (isalpha(peek(ctx))) {
-        // identifier / enum constant / generic
-        string ident = get_identifier(ctx);
-        if (string_equal(ident, string_literal("_Generic"))) {
-            // todo: handle _Generic
-        } else {
-            // todo: turn into value
-            // don't forget enums
-        }
+    token tok = next(ctx);
+    if (tok.type == TOKEN_IDENTIFIER) {
+        // identifier
+        // todo: turn into value
         return (value){};
-    } else if (isdigit(peek(ctx)) || peek(ctx) == '.') {
+    } else if (tok.type == TOKEN_NUMBER) {
         // integer / floating constant
-        number_literal constant = get_number(ctx);
+        number_literal constant = tok.num;
         return (value){};
-    } else if (peek(ctx) == '"') {
+    } else if (tok.type == TOKEN_STRING) {
         // string literal
         // todo: put string literal into readonly, this is just a pointer
         return (value){};
-    } else if (peek(ctx) == '(') {
+    } else if (tok.type == TOKEN_PUNCTUATOR && tok.punc == '(') {
         // parenthesized expression
-        expect(ctx, '(');
         value expr = parse_expression(ctx);
-        expect(ctx, ')');
+        expect_punc(ctx, PAREN_CLOSE);
         return expr;
-    } else if (peek(ctx) == '\'') {
-        // character literal
-        expect(ctx, '\'');
-        char c = next(ctx);
-        expect(ctx, '\'');
-        return (value){/* character literal */};
+    } else if (tok.type == TOKEN_KEYWORD && tok.kw == _Generic_kw) {
+        // _Generic expression
+        return (value){/* handle _Generic expression */};
     } else {
         // expected primary expression
         longjmp(ctx->error_jump, 1);
@@ -614,49 +733,36 @@ value parse_primary_expression(context *ctx) {
 value parse_postfix_expression(context *ctx) {
     // todo: support compound literals
     value base = parse_primary_expression(ctx);
-    if (peek(ctx) == '[') {
+    if (check_punc(ctx, BRACKET_OPEN)) {
         // array subscript
-        expect(ctx, '[');
         value index = parse_expression(ctx);
-        expect(ctx, ']');
+        expect_punc(ctx, BRACKET_CLOSE);
         // todo: handle array subscript
         return (value){/* array subscript */};
-    } else if (peek(ctx) == '(') {
+    } else if (check_punc(ctx, PAREN_OPEN)) {
         // function call
-        expect(ctx, '(');
-        while (peek(ctx) != ')') {
+        while (!check_punc(ctx, PAREN_CLOSE)) {
             value arg = parse_expression(ctx);
-            if (peek(ctx) != ')') {
-                expect(ctx, ',');
+            if (!check_punc(ctx, PAREN_CLOSE)) {
+                expect_punc(ctx, COMMA);
             }
         }
-        expect(ctx, ')');
         return (value){/* function call */};
-    } else if (peek(ctx) == '.') {
+    } else if (check_punc(ctx, DOT)) {
         // member access
-        next(ctx);
         string member = get_identifier(ctx);
         // todo: handle member access
         return (value){/* member access */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("->"))) {
+    } else if (check_punc(ctx, ARROW)) {
         // pointer member access
-        next(ctx);
-        next(ctx);
         string member = get_identifier(ctx);
         return (value){/* pointer member access */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("++"))) {
+    } else if (check_punc(ctx, INCREMENT)) {
         // unary increment
-        next(ctx);
-        next(ctx);
         // do something with the unary increment
         return (value){/* unary increment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("--"))) {
+    } else if (check_punc(ctx, DECREMENT)) {
         // unary decrement
-        next(ctx);
-        next(ctx);
         // do something with the unary decrement
         return (value){/* unary decrement */};
     }
@@ -664,60 +770,48 @@ value parse_postfix_expression(context *ctx) {
 }
 
 value parse_unary_expression(context *ctx) {
-    if (short_string_equal(multipeek(ctx, 2), shortstring_literal("++"))) {
-        next(ctx);
-        next(ctx);
+    if (check_punc(ctx, INCREMENT)) {
         value operand = parse_unary_expression(ctx);
         // do something with the unary plus
         return (value){/* unary plus */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("--"))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, DECREMENT)) {
         value operand = parse_unary_expression(ctx);
         // do something with the unary minus
         return (value){/* unary minus */};
-    } else if (peek(ctx) == '&') {
-        next(ctx);
+    } else if (check_punc(ctx, AND)) {
         value operand = parse_cast_expression(ctx);
         // do something with the unary plus
         return (value){/* unary plus */};
-    } else if (peek(ctx) == '*') {
-        next(ctx);
+    } else if (check_punc(ctx, STAR)) {
         value operand = parse_cast_expression(ctx);
         // do something with the unary minus
         return (value){/* unary minus */};
-    } else if (peek(ctx) == '+') {
-        next(ctx);
+    } else if (check_punc(ctx, PLUS)) {
         value operand = parse_cast_expression(ctx);
         // do something with the logical not
         return (value){/* logical not */};
-    } else if (peek(ctx) == '-') {
-        next(ctx);
+    } else if (check_punc(ctx, MINUS)) {
         value operand = parse_cast_expression(ctx);
         // do something with the bitwise not
         return (value){/* bitwise not */};
-    } else if (peek(ctx) == '~') {
-        next(ctx);
+    } else if (check_punc(ctx, NOT)) {
         value operand = parse_cast_expression(ctx);
         // do something with the address of
         return (value){/* address of */};
-    } else if (peek(ctx) == '!') {
-        next(ctx);
+    } else if (check_punc(ctx, LOGICAL_NOT)) {
         value operand = parse_cast_expression(ctx);
         // do something with dereferencing
         return (value){/* dereference */};
-    } else if (short_string_equal(multipeek(ctx, 6),
-                                  shortstring_literal("sizeof"))) {
+    } else if (peek(ctx).type == TOKEN_IDENTIFIER &&
+               peek(ctx).kw == sizeof_kw) {
         next(ctx);
         const type *ty = NULL;
-        if (peek(ctx) == '(') {
-            expect(ctx, '(');
+        if (check_punc(ctx, PAREN_OPEN)) {
             ty = parse_type_name(ctx);
             if (!ty) {
                 ty = parse_comma_expression(ctx).ty;
             }
-            expect(ctx, ')');
+            expect_punc(ctx, PAREN_CLOSE);
         } else {
             ty = parse_unary_expression(ctx).ty;
         }
@@ -730,13 +824,11 @@ value parse_unary_expression(context *ctx) {
 }
 
 value parse_cast_expression(context *ctx) {
-    if (peek(ctx) == '(') {
-        next(ctx);
+    if (check_punc(ctx, PAREN_OPEN)) {
         const type *ty = parse_type_name(ctx);
         if (ty) {
-
         }
-        expect(ctx, ')');
+        expect_punc(ctx, PAREN_CLOSE);
         return (value){/* handle cast to type */};
     }
     return parse_unary_expression(ctx);
@@ -746,18 +838,15 @@ value parse_multiplicative_expression(context *ctx) {
     value left = parse_cast_expression(ctx);
 
     while (true) {
-        if (peek(ctx) == '*') {
-            next(ctx);
+        if (check_punc(ctx, STAR)) {
             value right = parse_cast_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (peek(ctx) == '/') {
-            next(ctx);
+        } else if (check_punc(ctx, DIV)) {
             value right = parse_cast_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (peek(ctx) == '%') {
-            next(ctx);
+        } else if (check_punc(ctx, REM)) {
             value right = parse_cast_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
@@ -773,13 +862,11 @@ value parse_additive_expression(context *ctx) {
     value left = parse_multiplicative_expression(ctx);
 
     while (true) {
-        if (peek(ctx) == '+') {
-            next(ctx);
+        if (check_punc(ctx, PLUS)) {
             value right = parse_multiplicative_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (peek(ctx) == '-') {
-            next(ctx);
+        } else if (check_punc(ctx, MINUS)) {
             value right = parse_multiplicative_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
@@ -795,16 +882,11 @@ value parse_shift_expression(context *ctx) {
     value left = parse_additive_expression(ctx);
 
     while (true) {
-        shortstring op = multipeek(ctx, 2);
-        if (short_string_equal(op, shortstring_literal("<<"))) {
-            next(ctx);
-            next(ctx);
+        if (check_punc(ctx, LEFT_SHIFT)) {
             value right = parse_additive_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (short_string_equal(op, shortstring_literal(">>"))) {
-            next(ctx);
-            next(ctx);
+        } else if (check_punc(ctx, RIGHT_SHIFT)) {
             value right = parse_additive_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
@@ -820,26 +902,19 @@ value parse_relational_expression(context *ctx) {
     value left = parse_shift_expression(ctx);
 
     while (true) {
-        shortstring op = multipeek(ctx, 2);
-        if (peek(ctx) == '<') {
-            next(ctx);
+        if (check_punc(ctx, LESS_THAN)) {
             value right = parse_shift_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (peek(ctx) == '>') {
-            next(ctx);
+        } else if (check_punc(ctx, GREATER_THAN)) {
             value right = parse_shift_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (short_string_equal(op, shortstring_literal("<="))) {
-            next(ctx);
-            next(ctx);
+        } else if (check_punc(ctx, LESS_EQUAL)) {
             value right = parse_shift_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (short_string_equal(op, shortstring_literal(">="))) {
-            next(ctx);
-            next(ctx);
+        } else if (check_punc(ctx, GREATER_EQUAL)) {
             value right = parse_shift_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
@@ -855,16 +930,11 @@ value parse_equality_expression(context *ctx) {
     value left = parse_relational_expression(ctx);
 
     while (true) {
-        shortstring op = multipeek(ctx, 2);
-        if (short_string_equal(op, shortstring_literal("=="))) {
-            next(ctx);
-            next(ctx);
+        if (check_punc(ctx, EQUAL)) {
             value right = parse_relational_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
-        } else if (short_string_equal(op, shortstring_literal("!="))) {
-            next(ctx);
-            next(ctx);
+        } else if (check_punc(ctx, NOT_EQUAL)) {
             value right = parse_relational_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
@@ -879,8 +949,7 @@ value parse_equality_expression(context *ctx) {
 value parse_and_expression(context *ctx) {
     value left = parse_equality_expression(ctx);
 
-    while (peek(ctx) == '&') {
-        next(ctx);
+    while (check_punc(ctx, AND)) {
         value right = parse_equality_expression(ctx);
         // do something with left and right
         left = (value){/* combine left and right */};
@@ -892,8 +961,7 @@ value parse_and_expression(context *ctx) {
 value parse_exclusive_or_expression(context *ctx) {
     value left = parse_and_expression(ctx);
 
-    while (peek(ctx) == '^') {
-        next(ctx);
+    while (check_punc(ctx, XOR)) {
         value right = parse_and_expression(ctx);
         // do something with left and right
         left = (value){/* combine left and right */};
@@ -905,8 +973,7 @@ value parse_exclusive_or_expression(context *ctx) {
 value parse_inclusive_or_expression(context *ctx) {
     value left = parse_exclusive_or_expression(ctx);
 
-    while (peek(ctx) == '|') {
-        next(ctx);
+    while (check_punc(ctx, OR)) {
         value right = parse_exclusive_or_expression(ctx);
         // do something with left and right
         left = (value){/* combine left and right */};
@@ -918,9 +985,7 @@ value parse_inclusive_or_expression(context *ctx) {
 value parse_logical_and_expression(context *ctx) {
     value left = parse_inclusive_or_expression(ctx);
 
-    while (short_string_equal(multipeek(ctx, 2), shortstring_literal("&&"))) {
-        next(ctx);
-        next(ctx);
+    while (check_punc(ctx, AND_AND)) {
         value right = parse_inclusive_or_expression(ctx);
         // do something with left and right
         left = (value){/* combine left and right */};
@@ -932,9 +997,7 @@ value parse_logical_and_expression(context *ctx) {
 value parse_logical_or_expression(context *ctx) {
     value left = parse_logical_and_expression(ctx);
 
-    while (short_string_equal(multipeek(ctx, 2), shortstring_literal("||"))) {
-        next(ctx);
-        next(ctx);
+    while (check_punc(ctx, OR_OR)) {
         value right = parse_logical_and_expression(ctx);
         // do something with left and right
         left = (value){/* combine left and right */};
@@ -946,10 +1009,9 @@ value parse_logical_or_expression(context *ctx) {
 value parse_conditional_expression(context *ctx) {
     value left = parse_logical_or_expression(ctx);
 
-    if (peek(ctx) == '?') {
-        next(ctx);
+    if (check_punc(ctx, TERNARY_IF)) {
         value true_branch = parse_comma_expression(ctx);
-        expect(ctx, ':');
+        expect_punc(ctx, COLON);
         value false_branch = parse_conditional_expression(ctx);
 
         // todo: handle conditional expression
@@ -962,80 +1024,51 @@ value parse_conditional_expression(context *ctx) {
 value parse_assignment_expression(context *ctx) {
     value left = parse_conditional_expression(ctx);
 
-    if (peek(ctx) == '=') {
-        next(ctx);
+    if (check_punc(ctx, ASSIGN)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("+="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_ADD)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("-="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_SUB)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("*="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_SUB)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("/="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_MUL)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("%="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_DIV)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("&="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_REM)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("^="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_AND)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 2),
-                                  shortstring_literal("|="))) {
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_XOR)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 3),
-                                  shortstring_literal("<<="))) {
-        next(ctx);
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_OR)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
-    } else if (short_string_equal(multipeek(ctx, 3),
-                                  shortstring_literal(">>="))) {
-        next(ctx);
-        next(ctx);
-        next(ctx);
+    } else if (check_punc(ctx, ASSIGN_LEFT_SHIFT)) {
+        value right = parse_assignment_expression(ctx);
+        // todo: handle assignment operator
+        return (value){/* handle assignment */};
+    } else if (check_punc(ctx, ASSIGN_RIGHT_SHIFT)) {
         value right = parse_assignment_expression(ctx);
         // todo: handle assignment operator
         return (value){/* handle assignment */};
@@ -1050,38 +1083,32 @@ value parse_expression(context *ctx) {
 
 value parse_comma_expression(context *ctx) {
     value v = parse_expression(ctx);
-    while (peek(ctx) == ',') {
-        expect(ctx, ',');
+    while (check_punc(ctx, COMMA)) {
         v = parse_expression(ctx);
     }
     return v;
 }
 
-uint64_t execute_constant_expression(context *ctx) {
-    if (!isdigit(peek(ctx))) {
+uint64_t parse_constant_expression(context *ctx) {
+    value v = parse_comma_expression(ctx);
+    if (!v.is_constant) {
         // expected constant expression
         longjmp(ctx->error_jump, 1);
     }
-
-    uint64_t value = 0;
-    while (isdigit(peek(ctx))) {
-        value = value * 10 + (next_with_whitespace(ctx) - '0');
-    }
-    skip_fluff(ctx);
-
-    return value;
+    return v.u64;
 }
 
-bool parse_storage_class_specifier(context *ctx, string ident,
+bool parse_storage_class_specifier(context *ctx,
                                    storage_class_specifier *spec) {
-    const string storage_classes[] = {
-        string_literal("typedef"), string_literal("extern"),
-        string_literal("static"), /* string_literal("_Thread_local"), */
-        string_literal("auto"),    string_literal("register"),
+    const keyword storage_classes[] = {
+        typedef_kw, extern_kw,   static_kw, /* _Thread_local, */
+        auto_kw,    register_kw,
     };
 
     for (int i = 0; i < array_length(storage_classes); i++) {
-        if (string_equal(ident, storage_classes[i])) {
+        if (peek(ctx).type == TOKEN_KEYWORD &&
+            peek(ctx).kw == storage_classes[i]) {
+            next(ctx);
             *spec = i;
             return true;
         }
@@ -1089,21 +1116,22 @@ bool parse_storage_class_specifier(context *ctx, string ident,
     return false;
 }
 
-bool parse_type_specifier(context *ctx, string ident, const type **ty) {
+bool parse_type_specifier(context *ctx, const type **ty) {
     struct primitive_type_specifier {
         primitive_type type;
-        string name;
+        keyword name;
     };
 
     const struct primitive_type_specifier primitive_type_specifiers[] = {
-        {void_, string_literal("void")},     {char_, string_literal("char")},
-        {short_, string_literal("short")},   {int_, string_literal("int")},
-        {long_, string_literal("long")},     {float_, string_literal("float")},
-        {double_, string_literal("double")}, {bool_, string_literal("_Bool")},
+        {void_, void_kw},     {char_, char_kw}, {short_, short_kw},
+        {int_, int_kw},       {long_, long_kw}, {float_, float_kw},
+        {double_, double_kw},
     };
 
     for (int i = 0; i < array_length(primitive_type_specifiers); i++) {
-        if (string_equal(ident, primitive_type_specifiers[i].name)) {
+        if (peek(ctx).type == TOKEN_KEYWORD &&
+            peek(ctx).kw == primitive_type_specifiers[i].name) {
+            next(ctx);
             *ty = &vector_at(type, &ctx->types,
                              primitive_type_specifiers[i].type);
             return true;
@@ -1113,15 +1141,16 @@ bool parse_type_specifier(context *ctx, string ident, const type **ty) {
     return false;
 }
 
-bool parse_type_qualifier(context *ctx, string ident, type_qualifier *mask) {
-    const string type_qualifiers[] = {
-        string_literal("const"), string_literal("volatile"),
-        string_literal("restrict"),
-        // string_literal("_Atomic"),
+bool parse_type_qualifier(context *ctx, type_qualifier *mask) {
+    const keyword type_qualifiers[] = {
+        const_kw, volatile_kw, restrict_kw,
+        // _Atomic_kw,
     };
 
     for (int i = 0; i < array_length(type_qualifiers); i++) {
-        if (string_equal(ident, type_qualifiers[i])) {
+        if (peek(ctx).type == TOKEN_KEYWORD &&
+            peek(ctx).kw == type_qualifiers[i]) {
+            next(ctx);
             *mask |= (1 << i);
             return true;
         }
@@ -1129,15 +1158,16 @@ bool parse_type_qualifier(context *ctx, string ident, type_qualifier *mask) {
     return false;
 }
 
-bool parse_function_specifier(context *ctx, string ident,
-                              function_specifier *mask) {
-    const string function_specifiers[] = {
-        string_literal("inline"),
-        string_literal("_Noreturn"),
+bool parse_function_specifier(context *ctx, function_specifier *mask) {
+    const keyword function_specifiers[] = {
+        inline_kw,
+        _Noreturn_kw,
     };
 
     for (int i = 0; i < array_length(function_specifiers); i++) {
-        if (string_equal(ident, function_specifiers[i])) {
+        if (peek(ctx).type == TOKEN_KEYWORD &&
+            peek(ctx).kw == function_specifiers[i]) {
+            next(ctx);
             *mask |= (1 << i);
             return true;
         }
@@ -1145,11 +1175,12 @@ bool parse_function_specifier(context *ctx, string ident,
     return false;
 }
 
-bool parse_alignment_specifier(context *ctx, string ident, size_t *align) {
-    if (string_equal(ident, string_literal("_Alignas"))) {
-        expect(ctx, '(');
-        *align = execute_constant_expression(ctx);
-        expect(ctx, ')');
+bool parse_alignment_specifier(context *ctx, size_t *align) {
+    if (peek(ctx).type == TOKEN_KEYWORD && peek(ctx).kw == _Alignas_kw) {
+        next(ctx);
+        expect_punc(ctx, PAREN_OPEN);
+        *align = parse_constant_expression(ctx);
+        expect_punc(ctx, PAREN_CLOSE);
         return true;
     }
 
@@ -1177,24 +1208,11 @@ type *finalize_type(context *ctx, partial_type *partial_ty) {
     return ty;
 }
 
-string parse_pointer_opt(context *ctx, const type **ty) {
-    if (peek(ctx) != '*') {
-        return invalid_str;
-    }
-    expect(ctx, '*');
+void parse_pointer_opt(context *ctx, const type **ty) {
+    // assume guarded by check_punc(ctx, STAR)
 
-    string ident = invalid_str;
     type_qualifier mask = 0;
-    while (1) {
-        if (!isalpha(peek(ctx))) {
-            ident = invalid_str;
-            break;
-        }
-
-        ident = get_identifier(ctx);
-        if (!parse_type_qualifier(ctx, ident, &mask)) {
-            break;
-        }
+    while (parse_type_qualifier(ctx, &mask)) {
     }
 
     type *pointer_ty = calloc(1, sizeof(type));
@@ -1215,84 +1233,75 @@ string parse_pointer_opt(context *ctx, const type **ty) {
     if (mask & volatile_)
         pointer_ty->volatile_ = true;
 
-    if (!string_is_valid(ident)) {
+    if (check_punc(ctx, STAR)) {
         return parse_pointer_opt(ctx, ty);
-    } else {
-        return ident;
     }
 }
 
-string parse_declaration_specifiers(context *ctx, partial_type *partial_ty) {
-    string ident = invalid_str;
-
-    while (1) {
-        if (!isalpha(peek(ctx))) {
-            ident = invalid_str;
-            break;
-        } else {
-            ident = get_identifier(ctx);
-        }
-
-        if (parse_alignment_specifier(ctx, ident, &partial_ty->alignment))
+bool parse_declaration_specifiers(context *ctx, partial_type *partial_ty) {
+    bool has_specifiers = false;
+    for (;; has_specifiers = true) {
+        if (parse_alignment_specifier(ctx, &partial_ty->alignment))
             continue;
-        if (parse_function_specifier(ctx, ident,
-                                     &partial_ty->function_spec_mask))
+        if (parse_function_specifier(ctx, &partial_ty->function_spec_mask))
             continue;
-        if (parse_storage_class_specifier(ctx, ident,
-                                          &partial_ty->storage_class_spec))
+        if (parse_storage_class_specifier(ctx, &partial_ty->storage_class_spec))
             continue;
-        if (parse_type_qualifier(ctx, ident,
-                                 &partial_ty->type_qualifier_spec_mask))
+        if (parse_type_qualifier(ctx, &partial_ty->type_qualifier_spec_mask))
             continue;
-        if (parse_type_specifier(ctx, ident, &partial_ty->ty))
+        if (parse_type_specifier(ctx, &partial_ty->ty))
             continue;
 
         break;
     }
-
-    return ident;
+    return has_specifiers;
 }
 
-declarator parse_declarator(context *ctx, const type *ty, string ident);
+declarator parse_declarator(context *ctx, const type *ty);
 
 declarator parse_parameter_declaration(context *ctx) {
     partial_type partial_ty = {0};
-    string ident = parse_declaration_specifiers(ctx, &partial_ty);
+    parse_declaration_specifiers(ctx, &partial_ty);
     type *ty = finalize_type(ctx, &partial_ty);
 
     // todo: support abstract declarators (no identifier)
-    return parse_declarator(ctx, ty, ident);
+    return parse_declarator(ctx, ty);
 }
 
 owned_span parse_parameter_list(context *ctx) {
     vector params = {0};
 
-    while (peek(ctx) != ')') {
+    while (!check_punc(ctx, PAREN_CLOSE)) {
         declarator decl = parse_parameter_declaration(ctx);
         vector_push(declarator, &params, decl);
-        if (peek(ctx) != ')') {
-            expect(ctx, ',');
+        if (!check_punc(ctx, PAREN_CLOSE)) {
+            expect_punc(ctx, COMMA);
         }
     }
 
     return owned_span_from_vector(params);
 }
 
-declarator parse_direct_declarator(context *ctx, const type *ty, string ident) {
-    if (!string_is_valid(ident) && peek(ctx) == '(') {
-        expect(ctx, '(');
-        declarator decl = parse_declarator(ctx, ty, invalid_str);
-        expect(ctx, ')');
+declarator parse_direct_declarator(context *ctx, const type *ty) {
+    string ident;
+    if (check_punc(ctx, PAREN_OPEN)) {
+        declarator decl = parse_declarator(ctx, ty);
+        expect_punc(ctx, PAREN_CLOSE);
         ident = decl.name;
         ty = decl.ty;
+    } else {
+        token tok = next(ctx);
+        if (tok.type != TOKEN_IDENTIFIER) {
+            // expected identifier
+            longjmp(ctx->error_jump, 1);
+        }
+
+        ident = tok.ident;
     }
 
-    ident = string_is_valid(ident) ? ident : get_identifier(ctx);
-
-    if (peek(ctx) == '[') {
-        expect(ctx, '[');
-        uint64_t length = execute_constant_expression(ctx);
-        expect(ctx, ']');
+    if (check_punc(ctx, BRACKET_OPEN)) {
+        uint64_t length = parse_constant_expression(ctx);
+        expect_punc(ctx, BRACKET_CLOSE);
 
         type *array_ty = calloc(1, sizeof(type));
         if (!array_ty) {
@@ -1304,10 +1313,8 @@ declarator parse_direct_declarator(context *ctx, const type *ty, string ident) {
         array_ty->array.length = length;
 
         ty = array_ty;
-    } else if (peek(ctx) == '(') {
-        expect(ctx, '(');
+    } else if (check_punc(ctx, PAREN_OPEN)) {
         owned_span params = parse_parameter_list(ctx);
-        expect(ctx, ')');
 
         type *func_ty = calloc(1, sizeof(type));
         if (!func_ty) {
@@ -1324,68 +1331,185 @@ declarator parse_direct_declarator(context *ctx, const type *ty, string ident) {
     return (declarator){ident, ty};
 }
 
-declarator parse_declarator(context *ctx, const type *ty, string ident) {
-    if (!string_is_valid(ident))
-        ident = parse_pointer_opt(ctx, &ty);
-    return parse_direct_declarator(ctx, ty, ident);
+declarator parse_declarator(context *ctx, const type *ty) {
+    if (check_punc(ctx, STAR))
+        parse_pointer_opt(ctx, &ty);
+    return parse_direct_declarator(ctx, ty);
 }
 
 // returns a span of declarators
-owned_span parse_declaration(context *ctx) {
+bool parse_declaration(context *ctx, owned_span *decls_out) {
     partial_type partial_ty = {0};
-    string ident = parse_declaration_specifiers(ctx, &partial_ty);
+    if (!parse_declaration_specifiers(ctx, &partial_ty)) {
+        return false;
+    }
     type *ty = finalize_type(ctx, &partial_ty);
 
     vector declarators = {0};
 
-    while (peek(ctx) != ';') {
-        vector_push(declarator, &declarators, parse_declarator(ctx, ty, ident));
-        if (peek(ctx) == '=') {
-            expect(ctx, '=');
-            value init_value = parse_expression(ctx);
-            // todo: handle initialization, initializer list
-        }
-        if (peek(ctx) == ',') {
-            expect(ctx, ',');
-            ident = invalid_str;
-        } else {
-            break;
+    if (!soft_check_punc(ctx, SEMICOLON)) {
+        while (1) {
+            vector_push(declarator, &declarators, parse_declarator(ctx, ty));
+            if (check_punc(ctx, ASSIGN)) {
+                value init_value = parse_expression(ctx);
+                // todo: handle initialization, initializer list
+            }
+            if (!check_punc(ctx, COMMA)) {
+                break;
+            }
         }
     }
 
-    expect(ctx, ';');
-
-    return owned_span_from_vector(declarators);
-}
-
-string parse_statement(context *ctx);
-
-bool parse_compound_statement(context *ctx) {
-    if (peek(ctx) != '{')
-        return false;
-    expect(ctx, '{');
-
-    while (peek(ctx) != '}') {
-        // somehow disambiguate between declaration and statement
-    }
-
-    expect(ctx, '}');
+    *decls_out = owned_span_from_vector(declarators);
     return true;
 }
 
-string parse_statement(context *ctx) {
-    string ident = get_identifier(ctx);
+void parse_statement(context *ctx);
 
-    return ident;
+void parse_labeled_statement(context *ctx) {
+    string label_name = next(ctx).ident;
+    expect_punc(ctx, COLON);
+    parse_statement(ctx);
+}
+
+void parse_case_statement(context *ctx) {
+    value v = parse_expression(ctx);
+    expect_punc(ctx, COLON);
+    parse_statement(ctx);
+}
+
+void parse_default_case_statement(context *ctx) {
+    expect_punc(ctx, COLON);
+    parse_statement(ctx);
+}
+
+void parse_if_statement(context *ctx) {
+    expect_punc(ctx, PAREN_OPEN);
+    value condition = parse_expression(ctx);
+    expect_punc(ctx, PAREN_CLOSE);
+    parse_statement(ctx);
+    if (check_keyword(ctx, else_kw)) {
+        parse_statement(ctx);
+    }
+}
+
+void parse_switch_statement(context *ctx) {
+    expect_punc(ctx, PAREN_OPEN);
+    value condition = parse_expression(ctx);
+    expect_punc(ctx, PAREN_CLOSE);
+    parse_statement(ctx);
+}
+
+void parse_while_statement(context *ctx) {
+    expect_punc(ctx, PAREN_OPEN);
+    value condition = parse_expression(ctx);
+    expect_punc(ctx, PAREN_CLOSE);
+    parse_statement(ctx);
+}
+
+void parse_do_while_statement(context *ctx) {
+    parse_statement(ctx);
+    expect_punc(ctx, PAREN_OPEN);
+    value condition = parse_expression(ctx);
+    expect_punc(ctx, PAREN_CLOSE);
+    expect_keyword(ctx, while_kw);
+    expect_punc(ctx, SEMICOLON);
+}
+
+void parse_for_statement(context *ctx) {
+    expect_punc(ctx, PAREN_OPEN);
+    owned_span declarations;
+    if (!parse_declaration(ctx, &declarations)) {
+        parse_expression(ctx);
+    }
+    expect_punc(ctx, SEMICOLON);
+    if (!check_punc(ctx, SEMICOLON)) {
+        value condition = parse_expression(ctx);
+        expect_punc(ctx, SEMICOLON);
+    }
+    if (!check_punc(ctx, PAREN_CLOSE)) {
+        value increment = parse_expression(ctx);
+        expect_punc(ctx, PAREN_CLOSE);
+    }
+    parse_statement(ctx);
+}
+
+void parse_goto_statement(context *ctx) {
+    string label_name = next(ctx).ident;
+    expect_punc(ctx, SEMICOLON);
+}
+
+void parse_continue_statement(context *ctx) { expect_punc(ctx, SEMICOLON); }
+
+void parse_break_statement(context *ctx) { expect_punc(ctx, SEMICOLON); }
+
+void parse_return_statement(context *ctx) {
+    if (!check_punc(ctx, SEMICOLON)) {
+        value return_value = parse_expression(ctx);
+        expect_punc(ctx, SEMICOLON);
+    }
+}
+
+void parse_compound_statement(context *ctx) {
+    // assume guarded by check_punc(ctx, CURLY_OPEN)
+
+    while (!check_punc(ctx, CURLY_CLOSE)) {
+        owned_span declarations;
+        if (!parse_declaration(ctx, &declarations)) {
+            parse_statement(ctx);
+        } else {
+            expect_punc(ctx, SEMICOLON);
+        }
+    }
+}
+
+void parse_statement(context *ctx) {
+    token tok1 = peek(ctx), tok2 = peek2(ctx);
+    if (tok1.type == TOKEN_IDENTIFIER && tok2.type == TOKEN_PUNCTUATOR &&
+        tok2.punc == COLON) {
+        parse_labeled_statement(ctx);
+    } else if (check_keyword(ctx, case_kw)) {
+        parse_case_statement(ctx);
+    } else if (check_keyword(ctx, default_kw)) {
+        parse_default_case_statement(ctx);
+    } else if (check_punc(ctx, CURLY_OPEN)) {
+        parse_compound_statement(ctx);
+    } else if (check_keyword(ctx, if_kw)) {
+        parse_if_statement(ctx);
+    } else if (check_keyword(ctx, switch_kw)) {
+        parse_switch_statement(ctx);
+    } else if (check_keyword(ctx, while_kw)) {
+        parse_while_statement(ctx);
+    } else if (check_keyword(ctx, do_kw)) {
+        parse_do_while_statement(ctx);
+    } else if (check_keyword(ctx, for_kw)) {
+        parse_for_statement(ctx);
+    } else if (check_keyword(ctx, goto_kw)) {
+        parse_goto_statement(ctx);
+    } else if (check_keyword(ctx, continue_kw)) {
+        parse_continue_statement(ctx);
+    } else if (check_keyword(ctx, break_kw)) {
+        parse_break_statement(ctx);
+    } else if (check_keyword(ctx, return_kw)) {
+        parse_return_statement(ctx);
+    } else {
+        parse_expression(ctx);
+        expect_punc(ctx, SEMICOLON);
+    }
 }
 
 void parse_external_declaration(context *ctx) {
-    owned_span declarations = parse_declaration(ctx);
+    owned_span declarations;
+    if (!parse_declaration(ctx, &declarations)) {
+        longjmp(ctx->error_jump, 1);
+    }
 
     if (declarations.size == 1 &&
         vector_at(declarator, &declarations, 0).ty->tag == function &&
-        peek(ctx) == '{') {
+        check_punc(ctx, CURLY_OPEN)) {
         parse_compound_statement(ctx);
+    } else {
+        expect_punc(ctx, SEMICOLON);
     }
 
     for (int i = 0; i < declarations.size; i++) {
@@ -1505,9 +1629,8 @@ bool compile(const char *filepath, FILE *output_file) {
         return false;
     } else {
         init_context(&ctx, filepath);
-        skip_fluff(&ctx);
 
-        while (ctx.entry) {
+        while (peek(&ctx).type != TOKEN_EOF) {
             parse_external_declaration(&ctx);
         }
 
