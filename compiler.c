@@ -238,6 +238,29 @@ bool skip_whitespace(context *ctx) {
     return newline;
 }
 
+void skip_line_comment(context *ctx) {
+    char c;
+    while (oob_safe_peek(ctx, &c)) {
+        next_char(ctx);
+        if (c == '\\') {
+            // todo: technically a splice can go on last line of a file
+            expect_char(ctx, '\n');
+        } else if (c == '\n') {
+            return;
+        }
+    }
+}
+
+void skip_multiline_comment(context *ctx) {
+    while (1) {
+        char c = next_char(ctx);
+        if (c == '*' && peek_char(ctx) == '/') {
+            next_char(ctx);
+            return;
+        }
+    }
+}
+
 string resolve_file(context *ctx, string filename, bool resolve_local) {
     if (resolve_local) {
         // resolve local file
@@ -639,6 +662,20 @@ token read_token(context *ctx) {
         }
         t.type = TOKEN_IDENTIFIER;
         t.ident = ident;
+    } else if (peek_char(ctx) == '/') {
+        next_char(ctx);
+        if (peek_char(ctx) == '/') {
+            next_char(ctx);
+            skip_line_comment(ctx);
+            return read_token(ctx);
+        } else if (peek_char(ctx) == '*') {
+            next_char(ctx);
+            skip_multiline_comment(ctx);
+            return read_token(ctx);
+        } else {
+            t.type = TOKEN_PUNCTUATOR;
+            t.punc = DIV;
+        }
     } else {
         t.type = TOKEN_PUNCTUATOR;
         t.punc = get_punctuator(ctx);
