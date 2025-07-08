@@ -23,6 +23,13 @@ static void vector_grow(vector *vec, size_t type_size) {
         }                                                                      \
         vector_at(type, vec, (vec)->size++) = value;                           \
     } while (0)
+#define vector_remove(type, vec, index)                                        \
+    do {                                                                       \
+        memmove(&vector_at(type, (vec), (index)),                              \
+                &vector_at(type, (vec), (index) + 1),                          \
+                sizeof(type) * ((vec)->size - (index)-1));                     \
+        (vec)->size--;                                                         \
+    } while (0)
 
 typedef struct string {
     char *data;
@@ -66,18 +73,6 @@ static inline bool inplace_advance(source_entry *_entry) {
     *entry = *_entry;
     return true;
 }
-
-typedef struct shortstring {
-    char data[7];
-    char length;
-} shortstring;
-
-static inline bool short_string_equal(shortstring a, shortstring b) {
-    return memcmp(&a, &b, sizeof(shortstring)) == 0;
-}
-
-#define shortstring_literal(str)                                               \
-    ((shortstring){.data = str, .length = sizeof(str) - 1})
 
 typedef struct span {
     void *data;
