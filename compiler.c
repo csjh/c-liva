@@ -162,6 +162,26 @@ void init_context(context *ctx, const char *filepath) {
     ctx->filename = basename((char *)filepath);
     chdir(ctx->filedir);
 
+    ctx->sysdirs = (vector){0};
+    char *sysdir = calloc(1024, sizeof(char));
+    if (!sysdir) {
+        // Failed to allocate memory for system directory
+        longjmp(ctx->error_jump, 1);
+    }
+    // get the system include directory
+    // execute `xcrun --show-sdk-path` to get the SDK path
+    FILE *fp = popen("xcrun --show-sdk-path", "r");
+    if (!fp) {
+        // Failed to run command
+        longjmp(ctx->error_jump, 1);
+    }
+    fread(sysdir, 1, 1024, fp);
+    pclose(fp);
+
+    vector_push(char *, &ctx->sysdirs, sysdir);
+
+    ctx->quotedirs = (vector){0};
+
     ctx->entry = malloc(sizeof(source_entry));
     *ctx->entry = (source_entry){source, 0, NULL};
 
@@ -279,7 +299,24 @@ string resolve_file(context *ctx, string filename, bool resolve_local) {
             return (string){buffer, length};
         }
     }
-    // todo: resolve from more places
+    for (int i = 0; i < ctx->sysdirs.size; i++) {
+        char *dir = vector_at(char *, &ctx->sysdirs, i);
+        char path[1024] = {0};
+        snprintf(path, sizeof(path), "%s/%.*s", dir, (int)filename.length,
+                 filename.data);
+        FILE *file = fopen(path, "r");
+        if (file) {
+            fseek(file, 0, SEEK_END);
+            size_t length = ftell(file);
+            fseek(file, 0, SEEK_SET);
+
+            char *buffer = malloc(length);
+            fread(buffer, 1, length, file);
+            fclose(file);
+
+            return (string){buffer, length};
+        }
+    }
 
     // file not found
     longjmp(ctx->error_jump, 1);

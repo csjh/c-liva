@@ -371,6 +371,9 @@ typedef struct context {
     const char *filedir;
     const char *filename;
 
+    vector sysdirs;
+    vector quotedirs;
+
     jmp_buf error_jump;
 
     source_entry *entry;
