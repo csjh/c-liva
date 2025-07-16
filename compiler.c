@@ -771,7 +771,7 @@ void expect_keyword(context *ctx, keyword kw) {
 }
 
 value parse_expression(context *ctx);
-value parse_comma_expression(context *ctx);
+value parse_assignment_expression(context *ctx);
 value parse_cast_expression(context *ctx);
 
 const type *parse_type_name(context *ctx) { return NULL; }
@@ -809,14 +809,14 @@ value parse_postfix_expression(context *ctx) {
     value base = parse_primary_expression(ctx);
     if (check_punc(ctx, BRACKET_OPEN)) {
         // array subscript
-        value index = parse_expression(ctx);
+        value index = parse_assignment_expression(ctx);
         expect_punc(ctx, BRACKET_CLOSE);
         // todo: handle array subscript
         return (value){/* array subscript */};
     } else if (check_punc(ctx, PAREN_OPEN)) {
         // function call
         while (!check_punc(ctx, PAREN_CLOSE)) {
-            value arg = parse_expression(ctx);
+            value arg = parse_assignment_expression(ctx);
             if (!check_punc(ctx, PAREN_CLOSE)) {
                 expect_punc(ctx, COMMA);
             }
@@ -883,7 +883,7 @@ value parse_unary_expression(context *ctx) {
         if (check_punc(ctx, PAREN_OPEN)) {
             ty = parse_type_name(ctx);
             if (!ty) {
-                ty = parse_comma_expression(ctx).ty;
+                ty = parse_expression(ctx).ty;
             }
             expect_punc(ctx, PAREN_CLOSE);
         } else {
@@ -1084,7 +1084,7 @@ value parse_conditional_expression(context *ctx) {
     value left = parse_logical_or_expression(ctx);
 
     if (check_punc(ctx, TERNARY_IF)) {
-        value true_branch = parse_comma_expression(ctx);
+        value true_branch = parse_expression(ctx);
         expect_punc(ctx, COLON);
         value false_branch = parse_conditional_expression(ctx);
 
@@ -1152,19 +1152,15 @@ value parse_assignment_expression(context *ctx) {
 }
 
 value parse_expression(context *ctx) {
-    return parse_assignment_expression(ctx);
-}
-
-value parse_comma_expression(context *ctx) {
-    value v = parse_expression(ctx);
-    while (check_punc(ctx, COMMA)) {
-        v = parse_expression(ctx);
-    }
+    value v;
+    do {
+        v = parse_assignment_expression(ctx);
+    } while (check_punc(ctx, COMMA));
     return v;
 }
 
 uint64_t parse_constant_expression(context *ctx) {
-    value v = parse_comma_expression(ctx);
+    value v = parse_expression(ctx);
     if (!v.is_constant) {
         // expected constant expression
         longjmp(ctx->error_jump, 1);
@@ -1428,7 +1424,7 @@ bool parse_declaration(context *ctx, owned_span *decls_out) {
         while (1) {
             vector_push(declarator, &declarators, parse_declarator(ctx, ty));
             if (check_punc(ctx, ASSIGN)) {
-                value init_value = parse_expression(ctx);
+                value init_value = parse_assignment_expression(ctx);
                 // todo: handle initialization, initializer list
             }
             if (!check_punc(ctx, COMMA)) {
@@ -1569,6 +1565,8 @@ void parse_statement(context *ctx) {
         parse_break_statement(ctx);
     } else if (check_keyword(ctx, return_kw)) {
         parse_return_statement(ctx);
+    } else if (check_punc(ctx, SEMICOLON)) {
+        // empty statement
     } else {
         parse_expression(ctx);
         expect_punc(ctx, SEMICOLON);
