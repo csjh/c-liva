@@ -1335,7 +1335,10 @@ declarator parse_declarator(context *ctx, const type *ty);
 
 declarator parse_parameter_declaration(context *ctx) {
     partial_type partial_ty = {0};
-    parse_declaration_specifiers(ctx, &partial_ty);
+    if (!parse_declaration_specifiers(ctx, &partial_ty)) {
+        // expected declaration specifiers
+        longjmp(ctx->error_jump, 1);
+    }
     type *ty = finalize_type(ctx, &partial_ty);
 
     // todo: support abstract declarators (no identifier)
@@ -1348,7 +1351,7 @@ owned_span parse_parameter_list(context *ctx) {
     while (!check_punc(ctx, PAREN_CLOSE)) {
         declarator decl = parse_parameter_declaration(ctx);
         vector_push(declarator, &params, decl);
-        if (!check_punc(ctx, PAREN_CLOSE)) {
+        if (!soft_check_punc(ctx, PAREN_CLOSE)) {
             expect_punc(ctx, COMMA);
         }
     }
