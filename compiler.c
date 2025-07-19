@@ -780,8 +780,21 @@ value parse_primary_expression(context *ctx) {
     token tok = next(ctx);
     if (tok.type == TOKEN_IDENTIFIER) {
         // identifier
-        // todo: turn into value
-        return (value){};
+        for (int i = 0; i < ctx->variables.size; i++) {
+            variable var = vector_at(variable, &ctx->variables, i);
+            if (string_equal(var.name, tok.ident)) {
+                return var.val;
+            }
+        }
+        for (int i = 0; i < ctx->globals.size; i++) {
+            // todo: globals
+        }
+        for (int i = 0; i < ctx->functions.size; i++) {
+            // todo: function pointers
+        }
+
+        // expected expression
+        longjmp(ctx->error_jump, 1);
     } else if (tok.type == TOKEN_NUMBER) {
         // integer / floating constant
         number_literal constant = tok.num;
