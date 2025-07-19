@@ -1174,11 +1174,11 @@ value parse_expression(context *ctx) {
 
 uint64_t parse_constant_expression(context *ctx) {
     value v = parse_expression(ctx);
-    if (!v.is_constant) {
+    if (!v.is_constant || v.loc != cons) {
         // expected constant expression
         longjmp(ctx->error_jump, 1);
     }
-    return v.u64;
+    return v.integer;
 }
 
 bool parse_storage_class_specifier(context *ctx,

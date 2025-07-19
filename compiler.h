@@ -83,22 +83,58 @@ typedef struct type {
     };
 } type;
 
-enum location { reg, stack, imm, flags };
-enum value_category { lvalue, rvalue, function_designator };
+typedef enum location { reg, stack, cons, flags } location;
+typedef enum value_category {
+    rvalue,
+    lvalue,
+    function_designator
+} value_category;
+
+// clang-format off
+typedef enum ireg {
+    x0,  x1,  x2,  x3,  x4,  x5,  x6,  x7,  x8,  x9, x10, x11, x12, x13, x14, x15,
+    x16, x17, x18, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x30, xzr, sp = xzr
+} ireg;
+
+typedef enum freg {
+    d0,  d1,  d2,  d3,  d4,  d5,  d6,  d7,  d8,  d9,  d10, d11, d12, d13, d14, d15,
+    d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
+} freg;
+
+typedef enum cond {
+    eq = 0b0000, // Equal.
+    ne = 0b0001, // Not equal.
+    cs = 0b0010, // Unsigned higher or same (or carry set).
+    cc = 0b0011, // Unsigned lower (or carry clear).
+    mi = 0b0100, // Negative.
+    pl = 0b0101, // Positive or zero.
+    vs = 0b0110, // Signed overflow.
+    vc = 0b0111, // No signed overflow.
+    hi = 0b1000, // Unsigned higher.
+    ls = 0b1001, // Unsigned lower or same.
+    ge = 0b1010, // Signed greater than or equal.
+    lt = 0b1011, // Signed less than.
+    gt = 0b1100, // Signed greater than.
+    le = 0b1101, // Signed less than or equal.
+    al = 0b1110, // Always executed.
+    nv = 0b1111, // Never executed.
+} cond;
+// clang-format on
 
 typedef struct value {
-    enum value_category category;
+    value_category category;
     const type *ty;
     bool is_constant;
+    uint32_t alignment;
 
-    enum location loc;
+    location loc;
     union {
-        uint32_t u32;
-        uint64_t u64;
-        int32_t i32;
-        int64_t i64;
-        float f32;
-        double f64;
+        ireg ireg;
+        freg freg;
+        uint32_t offset;
+        cond flags;
+        int64_t integer;
+        double fp;
     };
 } value;
 
@@ -389,6 +425,7 @@ typedef struct context {
 
     vector globals;
     vector functions;
+    vector variables;
 
     vector enum_values;
 
