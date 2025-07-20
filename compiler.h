@@ -1,3 +1,5 @@
+#pragma once
+
 #include "./containers.h"
 #include <setjmp.h>
 #include <stdbool.h>
@@ -133,8 +135,11 @@ typedef struct value {
         freg freg;
         uint32_t offset;
         cond flags;
+
+        // for constant expressions
         int64_t integer;
         double fp;
+        void *data;
     };
 } value;
 
@@ -147,7 +152,6 @@ typedef struct variable {
 typedef struct global {
     string name;
     const type *ty;
-    uint32_t offset;
 } global;
 
 typedef enum storage_class_specifier {
@@ -184,6 +188,7 @@ typedef struct partial_type {
 typedef struct declarator {
     string name;
     const type *ty;
+    value initializer;
 } declarator;
 
 typedef struct alias {
@@ -208,6 +213,7 @@ typedef struct macro {
 typedef struct macho_builder {
     size_t n_strings;
     vector strings;
+    vector data;
     vector code;
     vector relocs;
     vector symbols;
@@ -403,6 +409,16 @@ typedef struct enum_value {
     uint64_t value;
 } enum_value;
 
+typedef struct regallocator {
+
+} regallocator;
+
+typedef struct function_defn {
+    string name;
+    const type *ty;
+    bool is_defined;
+} function_defn;
+
 typedef struct context {
     const char *filedir;
     const char *filename;
@@ -414,6 +430,8 @@ typedef struct context {
 
     source_entry *entry;
     token tokens[2];
+
+    regallocator regs;
 
     vector types;
     vector structs;

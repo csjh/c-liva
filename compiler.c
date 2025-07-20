@@ -1,4 +1,5 @@
 #include "./compiler.h"
+#include <assert.h>
 #include <ctype.h>
 #include <libgen.h>
 #include <mach-o/loader.h>
@@ -8,6 +9,137 @@
 #include <unistd.h>
 
 #define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
+
+// instruction functions
+void raw_noop(vector *code) { vector_push(uint32_t, code, 0xd503201f); }
+
+typedef enum enctype {
+    offset = 0b10,
+    preidx = 0b11,
+    pstidx = 0b01,
+} enctype;
+
+void raw_ldp(vector *code, bool sf, enctype enc, int16_t imm, ireg rt2, ireg rn,
+             ireg rt) {
+    size_t width = sf ? sizeof(uint64_t) : sizeof(uint32_t);
+    assert(imm % width == 0);
+    imm /= width;
+    assert(imm >= -64 && imm <= 63);
+    uint8_t imm7 = (uint8_t)imm & 0x7f;
+
+    vector_push(uint32_t, code,
+                0b00101000010000000000000000000000 | ((uint32_t)sf << 31) |
+                    ((uint32_t)enc << 23) | ((uint32_t)imm7 << 15) |
+                    ((uint32_t)rt2 << 10) | ((uint32_t)rn << 5) |
+                    ((uint32_t)rt << 0));
+}
+
+void raw_stp(vector *code, bool sf, enctype enc, int16_t imm, ireg rt2, ireg rn,
+             ireg rt) {
+    size_t width = sf ? sizeof(uint64_t) : sizeof(uint32_t);
+    assert(imm % width == 0);
+    imm /= width;
+    assert(imm >= -64 && imm <= 63);
+    uint8_t imm7 = (uint8_t)imm & 0x7f;
+
+    vector_push(uint32_t, code,
+                0b00101000000000000000000000000000 | ((uint32_t)sf << 31) |
+                    ((uint32_t)enc << 23) | ((uint32_t)imm7 << 15) |
+                    ((uint32_t)rt2 << 10) | ((uint32_t)rn << 5) |
+                    ((uint32_t)rt << 0));
+}
+
+typedef enum shifttype {
+    lsl = 0b00,
+    lsr = 0b01,
+    asr = 0b10,
+    ror = 0b11,
+} shifttype;
+
+void raw_addsub(vector *code, bool sf, bool sub, bool setflags, shifttype shift,
+                ireg rm, uint8_t shift_n, ireg rn, ireg rd) {
+    assert(shift_n < (sf ? 64 : 32));
+
+    vector_push(uint32_t, code,
+                0b00001011000000000000000000000000 | ((uint32_t)sf << 31) |
+                    ((uint32_t)sub << 30) | ((uint32_t)setflags << 29) |
+                    ((uint32_t)shift << 22) | ((uint32_t)rm << 16) |
+                    ((uint32_t)shift_n << 10) | ((uint32_t)rn << 5) |
+                    ((uint32_t)rd << 0));
+}
+
+void raw_addsub_cons(vector *code, bool sf, bool sub, bool setflags, bool shift,
+                     uint16_t imm12, ireg rn, ireg rd) {
+    assert(imm12 < 1 << 12);
+
+    vector_push(uint32_t, code,
+                0b00010001000000000000000000000000 | ((uint32_t)sf << 31) |
+                    ((uint32_t)sub << 30) | ((uint32_t)setflags << 29) |
+                    ((uint32_t)shift << 22) | ((uint32_t)imm12 << 10) |
+                    ((uint32_t)rn << 5) | ((uint32_t)rd << 0));
+}
+
+void raw_add(vector *code, bool sf, ireg rm, ireg rn, ireg rd, shifttype shift,
+             uint8_t shift_n) {
+    raw_addsub(code, sf, false, false, shift, rm, shift_n, rn, rd);
+}
+
+void raw_sub(vector *code, bool sf, ireg rm, ireg rn, ireg rd, shifttype shift,
+             uint8_t shift_n) {
+    raw_addsub(code, sf, true, false, shift, rm, shift_n, rn, rd);
+}
+
+void raw_add_cons(vector *code, bool sf, uint16_t imm12, ireg rn, ireg rd,
+                  bool shift) {
+    raw_addsub_cons(code, sf, false, false, shift, imm12, rn, rd);
+}
+
+void raw_sub_cons(vector *code, bool sf, uint16_t imm12, ireg rn, ireg rd,
+                  bool shift) {
+    raw_addsub_cons(code, sf, true, false, shift, imm12, rn, rd);
+}
+
+void raw_orr(vector *code, bool sf, shifttype shift, ireg rm, uint8_t shift_imm,
+             ireg rn, ireg rd) {
+    assert(shift_imm < (sf ? 64 : 32));
+
+    vector_push(uint32_t, code,
+                0b00101010000000000000000000000000 | ((uint32_t)sf << 31) |
+                    ((uint32_t)shift << 22) | ((uint32_t)rm << 16) |
+                    ((uint32_t)shift_imm << 10) | ((uint32_t)rn << 5) |
+                    ((uint32_t)rd << 0));
+}
+
+void raw_mov(vector *code, bool sf, ireg src, ireg dst) {
+    raw_orr(code, sf, lsl, src, 0, xzr, dst);
+}
+
+void raw_restoring_return(vector *code) {
+    raw_ldp(code, true, offset, 0, x30, sp, x29);
+    vector_push(uint32_t, code, 0b11010110010111110000001111000000);
+}
+
+// regalloc functions
+void force_into_specific_ireg(regallocator *regs, vector *code, struct value *v,
+                              ireg dest) {
+    assert(v->loc == reg);
+
+    if (v->ireg == dest) {
+        return;
+    }
+
+    raw_mov(code, true, v->ireg, dest);
+}
+
+void force_into_ireg(regallocator *regs, vector *code, struct value *v) {
+    assert(v->loc == reg);
+}
+
+int current_reg = 3;
+
+ireg get_new_ireg(regallocator *regs, vector *code) {
+    return (ireg)current_reg++;
+}
 
 void print_type(const type *ty) {
     if (!ty) {
@@ -951,8 +1083,19 @@ value parse_additive_expression(context *ctx) {
     while (true) {
         if (check_punc(ctx, PLUS)) {
             value right = parse_multiplicative_expression(ctx);
-            // do something with left and right
-            left = (value){/* combine left and right */};
+
+            force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
+            force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
+            ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+            raw_add(&ctx->macho.code, false, left.ireg, right.ireg, output, lsl,
+                    0);
+
+            left = (value){
+                .ty = left.ty,
+                .ireg = output,
+                .is_constant = left.is_constant && right.is_constant,
+            };
         } else if (check_punc(ctx, MINUS)) {
             value right = parse_multiplicative_expression(ctx);
             // do something with left and right
@@ -1534,11 +1677,22 @@ void parse_continue_statement(context *ctx) { expect_punc(ctx, SEMICOLON); }
 
 void parse_break_statement(context *ctx) { expect_punc(ctx, SEMICOLON); }
 
+void move_to_return_convention(context *ctx, value return_value) {
+    // todo: properly conform to ABI
+    force_into_specific_ireg(&ctx->regs, &ctx->macho.code, &return_value, x0);
+}
+
 void parse_return_statement(context *ctx) {
     if (!check_punc(ctx, SEMICOLON)) {
         value return_value = parse_expression(ctx);
         expect_punc(ctx, SEMICOLON);
+
+        // check type
+
+        move_to_return_convention(ctx, return_value);
     }
+
+    raw_restoring_return(&ctx->macho.code);
 }
 
 void parse_compound_statement(context *ctx) {
@@ -1591,43 +1745,112 @@ void parse_statement(context *ctx) {
     }
 }
 
+void add_function_definition(context *ctx, const declarator *decl) {
+    vector_push(function_defn, &ctx->functions,
+                ((function_defn){
+                    .name = decl->name,
+                    .ty = decl->ty,
+                    .is_defined = true,
+                }));
+
+    vector_push(char, &ctx->macho.symbol_names, '\0');
+
+    int symbol_start = ctx->macho.symbol_names.size;
+    vector_push(char, &ctx->macho.symbol_names, '_');
+    for (int i = 0; i < decl->name.length; i++) {
+        vector_push(char, &ctx->macho.symbol_names, decl->name.data[i]);
+    }
+
+    vector_push(struct nlist_64, &ctx->macho.symbols,
+                ((struct nlist_64){.n_un.n_strx = symbol_start,
+                                   .n_type = N_SECT | N_EXT,
+                                   .n_sect = 1,
+                                   .n_desc = 0,
+                                   .n_value = ctx->macho.code.size *
+                                              sizeof(uint32_t)}));
+}
+
 void parse_external_declaration(context *ctx) {
     owned_span declarations;
     if (!parse_declaration(ctx, &declarations)) {
         longjmp(ctx->error_jump, 1);
     }
 
-    if (declarations.size == 1 &&
-        vector_at(declarator, &declarations, 0).ty->tag == function &&
-        check_punc(ctx, CURLY_OPEN)) {
-        parse_compound_statement(ctx);
+    const declarator *first = &vector_at(declarator, &declarations, 0);
+    if (declarations.size == 1 && first->ty->tag == function) {
+        // function definition
+        if (check_punc(ctx, CURLY_OPEN)) {
+            add_function_definition(ctx, first);
+
+            // function prelude
+            raw_stp(&ctx->macho.code, true, offset, 0, x30, sp, x29);
+            raw_add_cons(&ctx->macho.code, true, 0, sp, x29, false);
+            // todo: handle stack size
+            raw_sub_cons(&ctx->macho.code, true, 0, sp, sp, false);
+            raw_sub_cons(&ctx->macho.code, true, 0, sp, sp, true);
+
+            for (int i = 0; i < first->ty->function.parameters.size; i++) {
+                const declarator *param =
+                    &vector_at(declarator, &first->ty->function.parameters, i);
+
+                vector_push(variable, &ctx->variables,
+                            ((variable){
+                                .name = param->name,
+                                .ty = param->ty,
+                                .val.ty = param->ty,
+                                .val.ireg = (ireg)i,
+                            }));
+            }
+
+            // parse body
+            parse_compound_statement(ctx);
+
+            // postlude
+            if (first->ty->function.return_type->id == void_) {
+                // if it's a void function, there's an implicit return
+                raw_restoring_return(&ctx->macho.code);
+            } else if (string_equal(first->name, string_literal("main"))) {
+                // if it's the main function, there's an implicit return 0
+                const type *intty = &vector_at(type, &ctx->types, int_);
+                move_to_return_convention(ctx,
+                                          (value){.ty = intty, .integer = 0});
+                raw_restoring_return(&ctx->macho.code);
+            }
+        } else {
+            expect_punc(ctx, SEMICOLON);
+
+            // function declaration
+            vector_push(function_defn, &ctx->functions,
+                        ((function_defn){
+                            .name = first->name,
+                            .ty = first->ty,
+                            .is_defined = false,
+                        }));
+        }
     } else {
         expect_punc(ctx, SEMICOLON);
-    }
 
-    for (int i = 0; i < declarations.size; i++) {
-        declarator decl = vector_at(declarator, &declarations, i);
-        global glob = {
-            .name = decl.name,
-            .ty = decl.ty,
-            .offset = 0, // todo: when i actually start the object file shit
-        };
-        vector_push(global, &ctx->globals, glob);
-
-        printf("Declarator %d: %.*s -> ", i, (int)decl.name.length,
-               decl.name.data);
-        print_type(decl.ty);
-        printf("\n");
+        for (int i = 0; i < declarations.size; i++) {
+            declarator decl = vector_at(declarator, &declarations, i);
+            vector_push(global, &ctx->globals,
+                        ((global){
+                            .name = decl.name,
+                            .ty = decl.ty,
+                        }));
+        }
     }
 }
 
 void objectify(macho_builder *macho, FILE *output_file) {
+    vector_push(char, &macho->symbol_names, '\0');
+
     size_t segment_start = sizeof(struct mach_header_64) +
                            sizeof(struct segment_command_64) +
-                           2 * sizeof(struct section_64) +
+                           3 * sizeof(struct section_64) +
                            sizeof(struct symtab_command),
            code_start = segment_start,
-           string_start = code_start + macho->code.size * sizeof(uint32_t),
+           data_start = code_start + macho->code.size * sizeof(uint32_t),
+           string_start = data_start + macho->data.size * sizeof(uint8_t),
            relocs_start = string_start + macho->strings.size * sizeof(char),
            symbols_start = relocs_start +
                            macho->relocs.size * sizeof(struct relocation_info),
@@ -1641,12 +1864,12 @@ void objectify(macho_builder *macho, FILE *output_file) {
         .filetype = MH_OBJECT,
         .ncmds = 2,
         .sizeofcmds = sizeof(struct segment_command_64) +
-                      2 * sizeof(struct section_64) +
+                      3 * sizeof(struct section_64) +
                       sizeof(struct symtab_command),
         .flags = MH_SUBSECTIONS_VIA_SYMBOLS,
     };
 
-    int nsects = 2; // code section, string section
+    int nsects = 3; // code section, data section, string section
     struct segment_command_64 segment = {
         .cmd = LC_SEGMENT_64,
         .cmdsize = sizeof(struct segment_command_64) +
@@ -1656,6 +1879,7 @@ void objectify(macho_builder *macho, FILE *output_file) {
         .vmsize = 0,
         .fileoff = segment_start,
         .filesize = macho->code.size * sizeof(uint32_t) +
+                    macho->data.size * sizeof(uint8_t) +
                     macho->strings.size * sizeof(char),
         .maxprot = VM_PROT_READ | VM_PROT_EXECUTE,
         .initprot = VM_PROT_READ | VM_PROT_EXECUTE,
@@ -1677,10 +1901,22 @@ void objectify(macho_builder *macho, FILE *output_file) {
             S_REGULAR | S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS,
     };
 
+    struct section_64 data_section = {
+        .sectname = "__data",
+        .segname = "__DATA",
+        .addr = code_section.addr + code_section.size,
+        .size = macho->data.size * sizeof(uint8_t),
+        .offset = data_start,
+        .align = sizeof(uint64_t),
+        .reloff = 0,
+        .nreloc = 0,
+        .flags = S_REGULAR,
+    };
+
     struct section_64 string_section = {
         .sectname = "__cstring",
         .segname = "__TEXT",
-        .addr = code_section.addr + code_section.size,
+        .addr = data_section.addr + data_section.size,
         .size = macho->strings.size * sizeof(char),
         .offset = string_start,
         // does this impact anything? maybe wide strings?
@@ -1701,10 +1937,12 @@ void objectify(macho_builder *macho, FILE *output_file) {
     fwrite(&header, sizeof(header), 1, output_file);
     fwrite(&segment, sizeof(segment), 1, output_file);
     fwrite(&code_section, sizeof(code_section), 1, output_file);
+    fwrite(&data_section, sizeof(data_section), 1, output_file);
     fwrite(&string_section, sizeof(string_section), 1, output_file);
     fwrite(&symbol_table_cmd, sizeof(symbol_table_cmd), 1, output_file);
 
     fwrite(macho->code.data, sizeof(uint32_t), macho->code.size, output_file);
+    fwrite(macho->data.data, sizeof(uint8_t), macho->data.size, output_file);
     fwrite(macho->strings.data, sizeof(char), macho->strings.size, output_file);
     fwrite(macho->relocs.data, sizeof(struct relocation_info),
            macho->relocs.size, output_file);
