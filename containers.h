@@ -1,3 +1,5 @@
+#pragma once
+
 #include <memory.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -16,6 +18,7 @@ static void vector_grow(vector *vec, size_t type_size) {
 }
 
 #define vector_at(type, vec, index) ((type *)((vec)->data))[index]
+#define vector_last(type, vec) ((type *)((vec)->data))[((vec)->size) - 1]
 #define vector_push(type, vec, value)                                          \
     do {                                                                       \
         if ((vec)->size >= (vec)->capacity) {                                  \

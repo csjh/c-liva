@@ -431,7 +431,7 @@ string resolve_file(context *ctx, string filename, bool resolve_local) {
             return (string){buffer, length};
         }
     }
-    for (int i = 0; i < ctx->sysdirs.size; i++) {
+    for (size_t i = 0; i < ctx->sysdirs.size; i++) {
         char *dir = vector_at(char *, &ctx->sysdirs, i);
         char path[1024] = {0};
         snprintf(path, sizeof(path), "%s/%.*s", dir, (int)filename.length,
@@ -568,7 +568,7 @@ string_literal get_string_literal(context *ctx) {
 }
 
 number_literal get_number(context *ctx) {
-    number_literal literal = {true, 0};
+    number_literal literal = {.is_integer = true, .integer = 0};
     while (isdigit(peek_char(ctx))) {
         char digit = next_char(ctx);
         literal.integer *= 10;
@@ -724,14 +724,13 @@ void do_define(context *ctx) { /* todo */
 
 void do_undef(context *ctx) {
     string name = get_identifier(ctx);
-    for (int i = 0; i < ctx->macros.size; i++) {
+    for (size_t i = 0; i < ctx->macros.size; i++) {
         macro m = vector_at(macro, &ctx->macros, i);
         if (string_equal(m.name, name)) {
             vector_remove(macro, &ctx->macros, i);
             break;
         }
     }
-    macro mac = {.name = name};
 }
 
 token read_token(context *ctx) {
@@ -807,20 +806,20 @@ token read_token(context *ctx) {
         t.num.integer = get_char_constant(ctx);
     } else if (isidentfirst(peek_char(ctx))) {
         string ident = get_identifier(ctx);
-        for (int i = 0; i < ctx->macros.size; i++) {
+        for (size_t i = 0; i < ctx->macros.size; i++) {
             macro m = vector_at(macro, &ctx->macros, i);
             if (string_equal(m.name, ident)) {
                 /* handle it somehow */
             }
         }
-        for (int i = 0; i < array_length(keyword_names); i++) {
+        for (size_t i = 0; i < array_length(keyword_names); i++) {
             if (string_equal(ident, keyword_names[i])) {
                 t.type = TOKEN_KEYWORD;
                 t.kw = i;
                 return t;
             }
         }
-        for (int i = 0; i < ctx->enum_values.size; i++) {
+        for (size_t i = 0; i < ctx->enum_values.size; i++) {
             enum_value ev = vector_at(enum_value, &ctx->enum_values, i);
             if (string_equal(ident, ev.name)) {
                 t.type = TOKEN_NUMBER;
@@ -912,16 +911,16 @@ value parse_primary_expression(context *ctx) {
     token tok = next(ctx);
     if (tok.type == TOKEN_IDENTIFIER) {
         // identifier
-        for (int i = 0; i < ctx->variables.size; i++) {
+        for (size_t i = 0; i < ctx->variables.size; i++) {
             variable var = vector_at(variable, &ctx->variables, i);
             if (string_equal(var.name, tok.ident)) {
                 return var.val;
             }
         }
-        for (int i = 0; i < ctx->globals.size; i++) {
+        for (size_t i = 0; i < ctx->globals.size; i++) {
             // todo: globals
         }
-        for (int i = 0; i < ctx->functions.size; i++) {
+        for (size_t i = 0; i < ctx->functions.size; i++) {
             // todo: function pointers
         }
 
@@ -1331,7 +1330,7 @@ bool parse_storage_class_specifier(context *ctx,
         auto_kw,    register_kw,
     };
 
-    for (int i = 0; i < array_length(storage_classes); i++) {
+    for (size_t i = 0; i < array_length(storage_classes); i++) {
         if (peek(ctx).type == TOKEN_KEYWORD &&
             peek(ctx).kw == storage_classes[i]) {
             next(ctx);
@@ -1354,7 +1353,7 @@ bool parse_type_specifier(context *ctx, const type **ty) {
         {double_, double_kw},
     };
 
-    for (int i = 0; i < array_length(primitive_type_specifiers); i++) {
+    for (size_t i = 0; i < array_length(primitive_type_specifiers); i++) {
         if (peek(ctx).type == TOKEN_KEYWORD &&
             peek(ctx).kw == primitive_type_specifiers[i].name) {
             next(ctx);
@@ -1373,7 +1372,7 @@ bool parse_type_qualifier(context *ctx, type_qualifier *mask) {
         // _Atomic_kw,
     };
 
-    for (int i = 0; i < array_length(type_qualifiers); i++) {
+    for (size_t i = 0; i < array_length(type_qualifiers); i++) {
         if (peek(ctx).type == TOKEN_KEYWORD &&
             peek(ctx).kw == type_qualifiers[i]) {
             next(ctx);
@@ -1390,7 +1389,7 @@ bool parse_function_specifier(context *ctx, function_specifier *mask) {
         _Noreturn_kw,
     };
 
-    for (int i = 0; i < array_length(function_specifiers); i++) {
+    for (size_t i = 0; i < array_length(function_specifiers); i++) {
         if (peek(ctx).type == TOKEN_KEYWORD &&
             peek(ctx).kw == function_specifiers[i]) {
             next(ctx);
@@ -1562,7 +1561,7 @@ declarator parse_direct_declarator(context *ctx, const type *ty) {
         ty = func_ty;
     }
 
-    return (declarator){ident, ty};
+    return (declarator){.name = ident, .ty = ty, .initializer = {0}};
 }
 
 declarator parse_declarator(context *ctx, const type *ty) {
@@ -1585,8 +1584,9 @@ bool parse_declaration(context *ctx, owned_span *decls_out) {
         while (1) {
             vector_push(declarator, &declarators, parse_declarator(ctx, ty));
             if (check_punc(ctx, ASSIGN)) {
+                // todo: handle initializer list
                 value init_value = parse_assignment_expression(ctx);
-                // todo: handle initialization, initializer list
+                vector_last(declarator, &declarators).initializer = init_value;
             }
             if (!check_punc(ctx, COMMA)) {
                 break;
@@ -1755,9 +1755,9 @@ void add_function_definition(context *ctx, const declarator *decl) {
 
     vector_push(char, &ctx->macho.symbol_names, '\0');
 
-    int symbol_start = ctx->macho.symbol_names.size;
+    size_t symbol_start = ctx->macho.symbol_names.size;
     vector_push(char, &ctx->macho.symbol_names, '_');
-    for (int i = 0; i < decl->name.length; i++) {
+    for (size_t i = 0; i < decl->name.length; i++) {
         vector_push(char, &ctx->macho.symbol_names, decl->name.data[i]);
     }
 
@@ -1789,7 +1789,7 @@ void parse_external_declaration(context *ctx) {
             raw_sub_cons(&ctx->macho.code, true, 0, sp, sp, false);
             raw_sub_cons(&ctx->macho.code, true, 0, sp, sp, true);
 
-            for (int i = 0; i < first->ty->function.parameters.size; i++) {
+            for (size_t i = 0; i < first->ty->function.parameters.size; i++) {
                 const declarator *param =
                     &vector_at(declarator, &first->ty->function.parameters, i);
 
@@ -1830,7 +1830,7 @@ void parse_external_declaration(context *ctx) {
     } else {
         expect_punc(ctx, SEMICOLON);
 
-        for (int i = 0; i < declarations.size; i++) {
+        for (size_t i = 0; i < declarations.size; i++) {
             declarator decl = vector_at(declarator, &declarations, i);
             vector_push(global, &ctx->globals,
                         ((global){
