@@ -11,17 +11,17 @@ bool compile(const char *filepath, FILE *output_file);
 
 typedef enum primitive {
     void_,
+    bool_,
     char_,
     signed_char,
-    short_,
-    int_,
-    long_,
-    long_long,
-    bool_,
     unsigned_char,
+    short_,
     unsigned_short,
+    int_,
     unsigned_int,
+    long_,
     unsigned_long,
+    long_long,
     unsigned_long_long,
     float_,
     double_,
@@ -30,6 +30,39 @@ typedef enum primitive {
 
     n_primitive_types
 } primitive_type;
+
+static inline bool is_signed(primitive_type type) {
+    switch (type) {
+    case char_:
+    case signed_char:
+    case short_:
+    case int_:
+    case long_:
+    case long_long:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static inline bool to_unsigned(primitive_type type) {
+    switch (type) {
+    case char_:
+        return unsigned_char;
+    case signed_char:
+        return unsigned_char;
+    case short_:
+        return unsigned_short;
+    case int_:
+        return unsigned_int;
+    case long_:
+        return unsigned_long;
+    case long_long:
+        return unsigned_long_long;
+    default:
+        return type;
+    }
+}
 
 typedef enum type_classification {
     basic,

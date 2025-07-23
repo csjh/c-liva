@@ -901,6 +901,84 @@ void expect_keyword(context *ctx, keyword kw) {
     }
 }
 
+void undergo_integer_promotion(context *ctx, const type **ty) {
+    if ((*ty)->tag != basic)
+        return;
+
+    static const primitive_type below_integers[] = {
+        bool_, signed_char, char_, unsigned_char, short_, unsigned_short,
+    };
+
+    for (size_t i = 0; i < array_length(below_integers); i++) {
+        if ((*ty)->primitive == below_integers[i]) {
+            *ty = &vector_at(type, &ctx->types, int_);
+            return;
+        }
+    }
+}
+
+void undergo_arithmetic_conversion(context *ctx, const type **ty1,
+                                   const type **ty2) {
+    if ((*ty1)->tag != basic || (*ty2)->tag != basic)
+        return;
+
+    if ((*ty1)->primitive == (*ty2)->primitive)
+        return;
+
+    const type **larger = (*ty1)->primitive > (*ty2)->primitive ? ty1 : ty2;
+
+    primitive_type conversion = void_;
+
+    if ((*larger)->primitive == long_double ||
+        (*larger)->primitive == double_ || (*larger)->primitive == float_) {
+        conversion = (*larger)->primitive;
+    } else {
+        undergo_integer_promotion(ctx, ty1);
+        undergo_integer_promotion(ctx, ty2);
+
+        if ((*ty1)->primitive == (*ty2)->primitive) {
+            // If the types are the same, that type is the common type.
+            return;
+        } else if (is_signed((*ty1)->primitive) &&
+                   is_signed((*ty2)->primitive)) {
+            // If the types have the same signedness (both signed or both
+            // unsigned), the operand whose type has the lesser conversion rank
+            // is implicitly converted to the other type.
+            conversion = (*larger)->primitive;
+        } else {
+            const type *signed_ty = is_signed((*ty1)->primitive) ? *ty1 : *ty2;
+            const type *unsigned_ty = signed_ty == *ty1 ? *ty2 : *ty1;
+
+            if (unsigned_ty->primitive > signed_ty->primitive) {
+                // If the unsigned type has conversion rank greater than or
+                // equal to the rank of the signed type, then the operand with
+                // the signed type is implicitly converted to the unsigned type.
+                conversion = unsigned_ty->primitive;
+            } else if ((signed_ty->primitive == long_long ||
+                        signed_ty->primitive == long_) &&
+                       unsigned_ty->primitive == unsigned_int) {
+                // If the signed type can represent all values of the unsigned
+                // type, then the operand with the unsigned type is implicitly
+                // converted to the signed type. (Since it's at least an int,
+                // unsigned int is the only applicable unsigned type)
+                conversion = signed_ty->primitive;
+            } else {
+                // Else, both operands undergo implicit conversion to the
+                // unsigned type counterpart of the signed operand's type.
+                conversion = to_unsigned(signed_ty->primitive);
+            }
+        }
+    }
+
+    if (conversion == float_ || conversion == double_ ||
+        conversion == long_double) {
+        // floating point conversions actually need code generation
+    }
+
+    *ty1 = &vector_at(type, &ctx->types, conversion);
+    *ty2 = *ty1;
+}
+
 value parse_expression(context *ctx);
 value parse_assignment_expression(context *ctx);
 value parse_cast_expression(context *ctx);
