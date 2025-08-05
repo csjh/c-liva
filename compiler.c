@@ -1432,9 +1432,7 @@ bool parse_type_specifier(context *ctx, const type **ty) {
     };
 
     for (size_t i = 0; i < array_length(primitive_type_specifiers); i++) {
-        if (peek(ctx).type == TOKEN_KEYWORD &&
-            peek(ctx).kw == primitive_type_specifiers[i].name) {
-            next(ctx);
+        if (check_keyword(ctx, primitive_type_specifiers[i].name)) {
             *ty = &vector_at(type, &ctx->types,
                              primitive_type_specifiers[i].type);
             return true;
