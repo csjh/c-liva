@@ -313,12 +313,9 @@ void init_context(context *ctx, const char *filepath) {
 
     vector_push(char *, &ctx->sysdirs, sysdir);
 
-    ctx->quotedirs = (vector){0};
-
     ctx->entry = malloc(sizeof(source_entry));
     *ctx->entry = (source_entry){source, 0, NULL};
 
-    ctx->types = (vector){0};
     for (int i = 0; i < n_primitive_types; i++) {
         type ty = {0};
         ty.id = i;
@@ -326,19 +323,6 @@ void init_context(context *ctx, const char *filepath) {
         ty.primitive = i;
         vector_push(type, &ctx->types, ty);
     }
-    ctx->structs = (vector){0};
-    ctx->unions = (vector){0};
-    ctx->enums = (vector){0};
-    ctx->typedefs = (vector){0};
-
-    ctx->macros = (vector){0};
-
-    ctx->globals = (vector){0};
-    ctx->functions = (vector){0};
-
-    ctx->enum_values = (vector){0};
-
-    ctx->macho = (macho_builder){0};
 
     ctx->tokens[0] = read_token(ctx);
     ctx->tokens[1] = read_token(ctx);
@@ -2141,7 +2125,7 @@ void objectify(macho_builder *macho, FILE *output_file) {
 }
 
 bool compile(const char *filepath, FILE *output_file) {
-    context ctx;
+    context ctx = {0};
 
     if (setjmp(ctx.error_jump)) {
         // todo: actually communicate information
