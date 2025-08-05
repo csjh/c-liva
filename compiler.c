@@ -1520,8 +1520,10 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                     ctx, &struct_size, &union_size, &alignment);
                 t->size = is_struct ? struct_size : union_size;
                 t->alignment = alignment;
+                vector_push(const type *, types, t);
 
-                expect_punc(ctx, CURLY_CLOSE);
+                *ty = t;
+                return true;
             } else if (!string_is_valid(name)) {
                 // should be either a definition or a reference
                 longjmp(ctx->error_jump, 1);
