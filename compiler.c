@@ -1417,57 +1417,57 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
     size_t bits = 0;
 
     do {
-    partial_type partial_ty = {0};
-    bool has_sq = false;
-    while (1) {
-        if (parse_type_specifier(ctx, &partial_ty.ty)) {
-            has_sq = true;
-            continue;
+        partial_type partial_ty = {0};
+        bool has_sq = false;
+        while (1) {
+            if (parse_type_specifier(ctx, &partial_ty.ty)) {
+                has_sq = true;
+                continue;
             } else if (parse_type_qualifier(
                            ctx, &partial_ty.type_qualifier_spec_mask)) {
-            has_sq = true;
-            continue;
-        } else if (!has_sq) {
-            // expected type specifier or type qualifier
-            longjmp(ctx->error_jump, 1);
-        } else {
-            break;
+                has_sq = true;
+                continue;
+            } else if (!has_sq) {
+                // expected type specifier or type qualifier
+                longjmp(ctx->error_jump, 1);
+            } else {
+                break;
+            }
         }
-    }
-    const type *ty = finalize_type(ctx, &partial_ty);
+        const type *ty = finalize_type(ctx, &partial_ty);
         do {
             // todo: handle optional declarator
-        declarator decl = parse_declarator(ctx, ty);
-        uint8_t bitwidth = 0;
-        if (check_punc(ctx, COLON)) {
-            // todo: check for valid bitfield type
-            uint64_t input = parse_constant_expression(ctx);
-            if (input > CHAR_BIT * ty->size) {
-                // bitfield width too large
-                longjmp(ctx->error_jump, 1);
+            declarator decl = parse_declarator(ctx, ty);
+            uint8_t bitwidth = 0;
+            if (check_punc(ctx, COLON)) {
+                // todo: check for valid bitfield type
+                uint64_t input = parse_constant_expression(ctx);
+                if (input > CHAR_BIT * ty->size) {
+                    // bitfield width too large
+                    longjmp(ctx->error_jump, 1);
+                }
+                bitwidth = (uint8_t)input;
+                bits += bitwidth;
+
+                *union_size = max(*union_size, bitwidth / CHAR_BIT);
+            } else {
+                // round up to alignment
+                uint32_t bit_alignment = ty->alignment * CHAR_BIT;
+                bits += (bits % bit_alignment) == 0
+                            ? 0
+                            : bit_alignment - (bits % bit_alignment);
+                bits += CHAR_BIT * ty->size;
+
+                *union_size = max(*union_size, ty->size);
             }
-            bitwidth = (uint8_t)input;
-            bits += bitwidth;
+            *alignment = max(*alignment, ty->alignment);
 
-            *union_size = max(*union_size, bitwidth / CHAR_BIT);
-        } else {
-            // round up to alignment
-            uint32_t bit_alignment = ty->alignment * CHAR_BIT;
-            bits += (bits % bit_alignment) == 0
-                        ? 0
-                        : bit_alignment - (bits % bit_alignment);
-            bits += CHAR_BIT * ty->size;
-
-            *union_size = max(*union_size, ty->size);
-        }
-        *alignment = max(*alignment, ty->alignment);
-
-        vector_push(member, &members,
-                    ((member){
-                        .name = decl.name,
-                        .ty = decl.ty,
-                        .bitwidth = bitwidth,
-                    }));
+            vector_push(member, &members,
+                        ((member){
+                            .name = decl.name,
+                            .ty = decl.ty,
+                            .bitwidth = bitwidth,
+                        }));
         } while (check_punc(ctx, COMMA));
         expect_punc(ctx, SEMICOLON);
     } while (!check_punc(ctx, CURLY_CLOSE));
@@ -1954,7 +1954,7 @@ void parse_external_declaration(context *ctx) {
 
     if (declarations.size == 1 &&
         vector_at(declarator, &declarations, 0).ty->tag == function) {
-    const declarator *first = &vector_at(declarator, &declarations, 0);
+        const declarator *first = &vector_at(declarator, &declarations, 0);
 
         // function definition
         if (check_punc(ctx, CURLY_OPEN)) {
