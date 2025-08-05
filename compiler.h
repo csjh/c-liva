@@ -82,6 +82,7 @@ typedef struct member {
     string name;
     const struct type *ty;
     size_t offset;
+    uint8_t bitwidth; // 0 if not a bitfield
 } member;
 
 typedef struct structure_type {
@@ -104,6 +105,8 @@ typedef struct pointer_type {
 typedef struct type {
     uint32_t id;
     uint32_t size;
+    // todo: this is very poorly handled rn
+    uint32_t alignment;
 
     bool const_;
     bool volatile_;

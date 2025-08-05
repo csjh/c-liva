@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #define array_length(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define max(a, b) ((a) > (b) ? (a) : (b))
 
 // instruction functions
 void raw_noop(vector *code) { vector_push(uint32_t, code, 0xd503201f); }
@@ -1419,6 +1420,78 @@ bool parse_storage_class_specifier(context *ctx,
     return false;
 }
 
+bool parse_type_specifier(context *ctx, const type **ty);
+bool parse_type_qualifier(context *ctx, type_qualifier *mask);
+declarator parse_declarator(context *ctx, const type *ty);
+const type *finalize_type(context *ctx, partial_type *partial_ty);
+
+owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
+                                         size_t *union_size,
+                                         size_t *alignment) {
+    partial_type partial_ty = {0};
+    bool has_sq = false;
+    while (1) {
+        if (parse_type_specifier(ctx, &partial_ty.ty)) {
+            has_sq = true;
+            continue;
+        } else if (parse_type_qualifier(ctx,
+                                        &partial_ty.type_qualifier_spec_mask)) {
+            has_sq = true;
+            continue;
+        } else if (!has_sq) {
+            // expected type specifier or type qualifier
+            longjmp(ctx->error_jump, 1);
+        } else {
+            break;
+        }
+    }
+
+    vector members = {0};
+    *union_size = 0;
+    size_t bits = 0;
+
+    const type *ty = finalize_type(ctx, &partial_ty);
+    while (1) {
+        declarator decl = parse_declarator(ctx, ty);
+        if (decl.initializer.ty != NULL) {
+            // struct members cannot have initializers
+            longjmp(ctx->error_jump, 1);
+        }
+        uint8_t bitwidth = 0;
+        if (check_punc(ctx, COLON)) {
+            // todo: check for valid bitfield type
+            uint64_t input = parse_constant_expression(ctx);
+            if (input > CHAR_BIT * ty->size) {
+                // bitfield width too large
+                longjmp(ctx->error_jump, 1);
+            }
+            bitwidth = (uint8_t)input;
+            bits += bitwidth;
+
+            *union_size = max(*union_size, bitwidth / CHAR_BIT);
+        } else {
+            // round up to alignment
+            uint32_t bit_alignment = ty->alignment * CHAR_BIT;
+            bits += (bits % bit_alignment) == 0
+                        ? 0
+                        : bit_alignment - (bits % bit_alignment);
+            bits += CHAR_BIT * ty->size;
+
+            *union_size = max(*union_size, ty->size);
+        }
+        *alignment = max(*alignment, ty->alignment);
+
+        vector_push(member, &members,
+                    ((member){
+                        .name = decl.name,
+                        .ty = decl.ty,
+                        .bitwidth = bitwidth,
+                    }));
+    }
+
+    return owned_span_from_vector(members);
+}
+
 bool parse_type_specifier(context *ctx, const type **ty) {
     struct primitive_type_specifier {
         primitive_type type;
@@ -1436,6 +1509,47 @@ bool parse_type_specifier(context *ctx, const type **ty) {
             *ty = &vector_at(type, &ctx->types,
                              primitive_type_specifiers[i].type);
             return true;
+        }
+    }
+
+    if (peek(ctx).type == TOKEN_KEYWORD) {
+        keyword kw = next(ctx).kw;
+        if (kw == struct_kw || kw == union_kw) {
+            string name = invalid_str;
+            if (peek(ctx).type == TOKEN_IDENTIFIER) {
+                name = next(ctx).ident;
+            }
+            bool is_struct = kw == struct_kw;
+            vector *types = is_struct ? &ctx->structs : &ctx->unions;
+            if (check_punc(ctx, CURLY_OPEN)) {
+                // definition
+                type *t = calloc(1, sizeof(type));
+                if (!t) {
+                    longjmp(ctx->error_jump, 1);
+                }
+                t->id = types->size;
+                t->tag = structure;
+                t->structure = (structure_type){.name = name, .members = {0}};
+
+                size_t struct_size, union_size, alignment;
+                t->structure.members = parse_struct_declaration_list(
+                    ctx, &struct_size, &union_size, &alignment);
+                t->size = is_struct ? struct_size : union_size;
+                t->alignment = alignment;
+
+                expect_punc(ctx, CURLY_CLOSE);
+            } else if (!string_is_valid(name)) {
+                // should be either a definition or a reference
+                longjmp(ctx->error_jump, 1);
+            } else {
+                for (size_t i = 0; i < types->size; i++) {
+                    const type *t = vector_at(const type *, types, i);
+                    if (string_equal(t->structure.name, name)) {
+                        *ty = t;
+                        return true;
+                    }
+                }
+            }
         }
     }
 
@@ -1557,8 +1671,6 @@ bool parse_declaration_specifiers(context *ctx, partial_type *partial_ty) {
     }
     return has_specifiers;
 }
-
-declarator parse_declarator(context *ctx, const type *ty);
 
 declarator parse_parameter_declaration(context *ctx) {
     partial_type partial_ty = {0};
