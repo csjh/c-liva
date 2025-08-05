@@ -1412,14 +1412,19 @@ const type *finalize_type(context *ctx, partial_type *partial_ty);
 owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
                                          size_t *union_size,
                                          size_t *alignment) {
+    vector members = {0};
+    *union_size = 0;
+    size_t bits = 0;
+
+    do {
     partial_type partial_ty = {0};
     bool has_sq = false;
     while (1) {
         if (parse_type_specifier(ctx, &partial_ty.ty)) {
             has_sq = true;
             continue;
-        } else if (parse_type_qualifier(ctx,
-                                        &partial_ty.type_qualifier_spec_mask)) {
+            } else if (parse_type_qualifier(
+                           ctx, &partial_ty.type_qualifier_spec_mask)) {
             has_sq = true;
             continue;
         } else if (!has_sq) {
@@ -1429,18 +1434,10 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
             break;
         }
     }
-
-    vector members = {0};
-    *union_size = 0;
-    size_t bits = 0;
-
     const type *ty = finalize_type(ctx, &partial_ty);
-    while (1) {
+        do {
+            // todo: handle optional declarator
         declarator decl = parse_declarator(ctx, ty);
-        if (decl.initializer.ty != NULL) {
-            // struct members cannot have initializers
-            longjmp(ctx->error_jump, 1);
-        }
         uint8_t bitwidth = 0;
         if (check_punc(ctx, COLON)) {
             // todo: check for valid bitfield type
@@ -1471,7 +1468,12 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
                         .ty = decl.ty,
                         .bitwidth = bitwidth,
                     }));
-    }
+        } while (check_punc(ctx, COMMA));
+        expect_punc(ctx, SEMICOLON);
+    } while (!check_punc(ctx, CURLY_CLOSE));
+
+    bits += (bits % CHAR_BIT) == 0 ? 0 : CHAR_BIT - (bits % CHAR_BIT);
+    *struct_size = bits / CHAR_BIT;
 
     return owned_span_from_vector(members);
 }
@@ -1950,8 +1952,10 @@ void parse_external_declaration(context *ctx) {
         longjmp(ctx->error_jump, 1);
     }
 
+    if (declarations.size == 1 &&
+        vector_at(declarator, &declarations, 0).ty->tag == function) {
     const declarator *first = &vector_at(declarator, &declarations, 0);
-    if (declarations.size == 1 && first->ty->tag == function) {
+
         // function definition
         if (check_punc(ctx, CURLY_OPEN)) {
             add_function_definition(ctx, first);
