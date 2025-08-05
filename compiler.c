@@ -1478,6 +1478,33 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
     return owned_span_from_vector(members);
 }
 
+void parse_enumerator_list(context *ctx) {
+    uint32_t value = 0;
+    do {
+        if (check_punc(ctx, CURLY_CLOSE))
+            return;
+
+        token tok = next(ctx);
+        if (tok.type != TOKEN_IDENTIFIER) {
+            // expected identifier for enumerator
+            longjmp(ctx->error_jump, 1);
+        }
+        if (check_punc(ctx, ASSIGN)) {
+            value = parse_constant_expression(ctx);
+            if (value > UINT32_MAX) {
+                // enumerator value too large
+                longjmp(ctx->error_jump, 1);
+            }
+        } else {
+            value++;
+        }
+        vector_push(enum_value, &ctx->enum_values,
+                    ((enum_value){.name = tok.ident, .value = value}));
+    } while (check_punc(ctx, COMMA));
+
+    expect_punc(ctx, CURLY_CLOSE);
+}
+
 bool parse_type_specifier(context *ctx, const type **ty) {
     struct primitive_type_specifier {
         primitive_type type;
@@ -1532,6 +1559,40 @@ bool parse_type_specifier(context *ctx, const type **ty) {
             } else {
                 for (size_t i = 0; i < types->size; i++) {
                     const type *t = vector_at(const type *, types, i);
+                    if (string_equal(t->structure.name, name)) {
+                        *ty = t;
+                        return true;
+                    }
+                }
+            }
+        } else if (kw == enum_kw) {
+            string name = invalid_str;
+            if (peek(ctx).type == TOKEN_IDENTIFIER) {
+                name = next(ctx).ident;
+            }
+            if (check_punc(ctx, CURLY_OPEN)) {
+                parse_enumerator_list(ctx);
+
+                type *t = calloc(1, sizeof(type));
+                if (!t) {
+                    longjmp(ctx->error_jump, 1);
+                }
+                t->id = ctx->enums.size;
+                t->tag = structure;
+                t->structure = (structure_type){.name = name, .members = {0}};
+
+                t->size = sizeof(int);
+                t->alignment = sizeof(int);
+                vector_push(const type *, &ctx->enums, t);
+
+                *ty = t;
+                return true;
+            } else if (!string_is_valid(name)) {
+                // should be either a definition or a reference
+                longjmp(ctx->error_jump, 1);
+            } else {
+                for (size_t i = 0; i < ctx->enums.size; i++) {
+                    const type *t = vector_at(const type *, &ctx->enums, i);
                     if (string_equal(t->structure.name, name)) {
                         *ty = t;
                         return true;
