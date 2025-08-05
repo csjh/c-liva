@@ -1488,7 +1488,7 @@ bool parse_alignment_specifier(context *ctx, size_t *align) {
     return false;
 }
 
-type *finalize_type(context *ctx, partial_type *partial_ty) {
+const type *finalize_type(context *ctx, partial_type *partial_ty) {
     type *ty = calloc(1, sizeof(type));
     if (!ty) {
         longjmp(ctx->error_jump, 1);
@@ -1566,7 +1566,7 @@ declarator parse_parameter_declaration(context *ctx) {
         // expected declaration specifiers
         longjmp(ctx->error_jump, 1);
     }
-    type *ty = finalize_type(ctx, &partial_ty);
+    const type *ty = finalize_type(ctx, &partial_ty);
 
     // todo: support abstract declarators (no identifier)
     return parse_declarator(ctx, ty);
@@ -1652,7 +1652,7 @@ bool parse_declaration(context *ctx, owned_span *decls_out) {
     if (!parse_declaration_specifiers(ctx, &partial_ty)) {
         return false;
     }
-    type *ty = finalize_type(ctx, &partial_ty);
+    const type *ty = finalize_type(ctx, &partial_ty);
 
     vector declarators = {0};
 
