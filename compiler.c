@@ -1547,7 +1547,15 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                 size_t struct_size, union_size, alignment;
                 t->structure.members = parse_struct_declaration_list(
                     ctx, &struct_size, &union_size, &alignment);
-                t->size = is_struct ? struct_size : union_size;
+                if (is_struct) {
+                    t->size = struct_size;
+                } else {
+                    t->size = union_size;
+                    for (int i = 0; i < t->structure.members.size; i++) {
+                        // unions all start at 0(?)
+                        vector_at(member, &t->structure.members, i).offset = 0;
+                    }
+                }
                 t->alignment = alignment;
                 vector_push(const type *, types, t);
 
