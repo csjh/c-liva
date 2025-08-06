@@ -1495,11 +1495,10 @@ void parse_enumerator_list(context *ctx) {
                 // enumerator value too large
                 longjmp(ctx->error_jump, 1);
             }
-        } else {
-            value++;
         }
         vector_push(enum_value, &ctx->enum_values,
                     ((enum_value){.name = tok.ident, .value = value}));
+        value++;
     } while (check_punc(ctx, COMMA));
 
     expect_punc(ctx, CURLY_CLOSE);
