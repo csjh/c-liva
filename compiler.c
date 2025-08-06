@@ -966,7 +966,6 @@ void undergo_arithmetic_conversion(context *ctx, const type **ty1,
 
 value parse_expression(context *ctx);
 value parse_assignment_expression(context *ctx);
-value parse_cast_expression(context *ctx);
 
 const type *parse_type_name(context *ctx) { return NULL; }
 
@@ -998,10 +997,21 @@ value parse_primary_expression(context *ctx) {
         // todo: put string literal into readonly, this is just a pointer
         return (value){};
     } else if (tok.type == TOKEN_PUNCTUATOR && tok.punc == '(') {
-        // parenthesized expression
-        value expr = parse_expression(ctx);
-        expect_punc(ctx, PAREN_CLOSE);
-        return expr;
+        // parenthesized expression or cast or compound literal
+        const type *ty = parse_type_name(ctx);
+        if (!ty) {
+            value expr = parse_expression(ctx);
+            expect_punc(ctx, PAREN_CLOSE);
+            return expr;
+        } else {
+            expect_punc(ctx, PAREN_CLOSE);
+            if (check_punc(ctx, CURLY_OPEN)) {
+                // todo: compound literal
+                return (value){/* handle compound literal */};
+            } else {
+                return (value){/* handle cast */};
+            }
+        }
     } else if (tok.type == TOKEN_KEYWORD && tok.kw == _Generic_kw) {
         // _Generic expression
         return (value){/* handle _Generic expression */};
@@ -1060,27 +1070,27 @@ value parse_unary_expression(context *ctx) {
         // do something with the unary minus
         return (value){/* unary minus */};
     } else if (check_punc(ctx, AND)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with the unary plus
         return (value){/* unary plus */};
     } else if (check_punc(ctx, STAR)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with the unary minus
         return (value){/* unary minus */};
     } else if (check_punc(ctx, PLUS)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with the logical not
         return (value){/* logical not */};
     } else if (check_punc(ctx, MINUS)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with the bitwise not
         return (value){/* bitwise not */};
     } else if (check_punc(ctx, NOT)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with the address of
         return (value){/* address of */};
     } else if (check_punc(ctx, LOGICAL_NOT)) {
-        value operand = parse_cast_expression(ctx);
+        value operand = parse_unary_expression(ctx);
         // do something with dereferencing
         return (value){/* dereference */};
     } else if (check_keyword(ctx, sizeof_kw)) {
@@ -1102,31 +1112,20 @@ value parse_unary_expression(context *ctx) {
     }
 }
 
-value parse_cast_expression(context *ctx) {
-    if (check_punc(ctx, PAREN_OPEN)) {
-        const type *ty = parse_type_name(ctx);
-        if (ty) {
-        }
-        expect_punc(ctx, PAREN_CLOSE);
-        return (value){/* handle cast to type */};
-    }
-    return parse_unary_expression(ctx);
-}
-
 value parse_multiplicative_expression(context *ctx) {
-    value left = parse_cast_expression(ctx);
+    value left = parse_unary_expression(ctx);
 
     while (true) {
         if (check_punc(ctx, STAR)) {
-            value right = parse_cast_expression(ctx);
+            value right = parse_unary_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
         } else if (check_punc(ctx, DIV)) {
-            value right = parse_cast_expression(ctx);
+            value right = parse_unary_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
         } else if (check_punc(ctx, REM)) {
-            value right = parse_cast_expression(ctx);
+            value right = parse_unary_expression(ctx);
             // do something with left and right
             left = (value){/* combine left and right */};
         } else {
