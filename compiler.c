@@ -1083,9 +1083,7 @@ value parse_unary_expression(context *ctx) {
         value operand = parse_cast_expression(ctx);
         // do something with dereferencing
         return (value){/* dereference */};
-    } else if (peek(ctx).type == TOKEN_IDENTIFIER &&
-               peek(ctx).kw == sizeof_kw) {
-        next(ctx);
+    } else if (check_keyword(ctx, sizeof_kw)) {
         const type *ty = NULL;
         if (check_punc(ctx, PAREN_OPEN)) {
             ty = parse_type_name(ctx);
@@ -1394,9 +1392,7 @@ bool parse_storage_class_specifier(context *ctx,
     };
 
     for (size_t i = 0; i < array_length(storage_classes); i++) {
-        if (peek(ctx).type == TOKEN_KEYWORD &&
-            peek(ctx).kw == storage_classes[i]) {
-            next(ctx);
+        if (check_keyword(ctx, storage_classes[i])) {
             *spec = i;
             return true;
         }
@@ -1619,9 +1615,7 @@ bool parse_type_qualifier(context *ctx, type_qualifier *mask) {
     };
 
     for (size_t i = 0; i < array_length(type_qualifiers); i++) {
-        if (peek(ctx).type == TOKEN_KEYWORD &&
-            peek(ctx).kw == type_qualifiers[i]) {
-            next(ctx);
+        if (check_keyword(ctx, type_qualifiers[i])) {
             *mask |= (1 << i);
             return true;
         }
@@ -1636,9 +1630,7 @@ bool parse_function_specifier(context *ctx, function_specifier *mask) {
     };
 
     for (size_t i = 0; i < array_length(function_specifiers); i++) {
-        if (peek(ctx).type == TOKEN_KEYWORD &&
-            peek(ctx).kw == function_specifiers[i]) {
-            next(ctx);
+        if (check_keyword(ctx, function_specifiers[i])) {
             *mask |= (1 << i);
             return true;
         }
@@ -1647,8 +1639,7 @@ bool parse_function_specifier(context *ctx, function_specifier *mask) {
 }
 
 bool parse_alignment_specifier(context *ctx, size_t *align) {
-    if (peek(ctx).type == TOKEN_KEYWORD && peek(ctx).kw == _Alignas_kw) {
-        next(ctx);
+    if (check_keyword(ctx, _Alignas_kw)) {
         expect_punc(ctx, PAREN_OPEN);
         *align = parse_constant_expression(ctx);
         expect_punc(ctx, PAREN_CLOSE);
