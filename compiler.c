@@ -316,13 +316,34 @@ void init_context(context *ctx, const char *filepath) {
     ctx->entry = malloc(sizeof(source_entry));
     *ctx->entry = (source_entry){source, 0, NULL};
 
-    for (int i = 0; i < n_primitive_types; i++) {
-        type ty = {0};
-        ty.id = i;
-        ty.tag = basic;
-        ty.primitive = i;
-        vector_push(type, &ctx->types, ty);
-    }
+#define insert_primitive(_primitive, _size)                                    \
+    vector_push(type, &ctx->types,                                             \
+                ((type){                                                       \
+                    .id = _primitive,                                          \
+                    .size = _size,                                             \
+                    .alignment = _size,                                        \
+                    .tag = basic,                                              \
+                    .primitive = _primitive,                                   \
+                }))
+
+    insert_primitive(void_, 0);
+    insert_primitive(bool_, 1);
+    insert_primitive(char_, 1);
+    insert_primitive(signed_char, 1);
+    insert_primitive(unsigned_char, 1);
+    insert_primitive(short_, 2);
+    insert_primitive(unsigned_short, 2);
+    insert_primitive(int_, 4);
+    insert_primitive(unsigned_int, 4);
+    insert_primitive(long_, 8);
+    insert_primitive(unsigned_long, 8);
+    insert_primitive(long_long, 8);
+    insert_primitive(unsigned_long_long, 8);
+    insert_primitive(float_, 4);
+    insert_primitive(double_, 8);
+    insert_primitive(long_double, 8);
+
+#undef insert_primitive
 
     ctx->tokens[0] = read_token(ctx);
     ctx->tokens[1] = read_token(ctx);
