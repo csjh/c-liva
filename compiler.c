@@ -1642,6 +1642,23 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
                 longjmp(ctx->error_jump, 1);
             }
         }
+    } else if (peek(ctx).type == TOKEN_IDENTIFIER) {
+        string ident = next(ctx).ident;
+
+        for (size_t i = 0; i < ctx->typedefs.size; i++) {
+            alias al = vector_at(alias, &ctx->typedefs, i);
+            if (string_equal(al.name, ident)) {
+                if (ty->specifier.basic_is_set) {
+                    // type already specified
+                    longjmp(ctx->error_jump, 1);
+                }
+                ty->specifier.ty = al.ty;
+                return true;
+            }
+        }
+
+        // type not found
+        longjmp(ctx->error_jump, 1);
     }
 
     return false;
