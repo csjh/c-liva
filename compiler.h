@@ -212,13 +212,24 @@ typedef enum function_specifier {
     noreturn = 2,
 } function_specifier;
 
+typedef struct type_specifier {
+    const type *ty;
+
+    bool basic_is_set;
+    primitive_type basic_ty;
+    bool is_long;
+    bool is_longlong;
+    bool is_short;
+    bool is_signed;
+    bool is_unsigned;
+} type_specifier;
+
 typedef struct partial_type {
     storage_class_specifier storage_class_spec;
     type_qualifier type_qualifier_spec_mask;
     function_specifier function_spec_mask;
     size_t alignment;
-
-    const type *ty;
+    type_specifier specifier;
 } partial_type;
 
 typedef struct declarator {

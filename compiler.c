@@ -849,10 +849,7 @@ token next(context *ctx) {
 
 bool soft_check_punc(context *ctx, punctuator punc) {
     token tok = peek(ctx);
-    if (tok.type == TOKEN_PUNCTUATOR && tok.punc == punc) {
-        return true;
-    }
-    return false;
+    return tok.type == TOKEN_PUNCTUATOR && tok.punc == punc;
 }
 
 bool check_punc(context *ctx, punctuator punc) {
@@ -870,9 +867,13 @@ void expect_punc(context *ctx, punctuator punc) {
     }
 }
 
-bool check_keyword(context *ctx, keyword kw) {
+bool soft_check_keyword(context *ctx, keyword kw) {
     token tok = peek(ctx);
-    if (tok.type == TOKEN_KEYWORD && tok.kw == kw) {
+    return tok.type == TOKEN_KEYWORD && tok.kw == kw;
+}
+
+bool check_keyword(context *ctx, keyword kw) {
+    if (soft_check_keyword(ctx, kw)) {
         next(ctx);
         return true;
     }
@@ -1399,7 +1400,7 @@ bool parse_storage_class_specifier(context *ctx,
     return false;
 }
 
-bool parse_type_specifier(context *ctx, const type **ty);
+bool parse_type_specifier(context *ctx, partial_type *ty);
 bool parse_type_qualifier(context *ctx, type_qualifier *mask);
 declarator parse_declarator(context *ctx, const type *ty, bool abstract);
 const type *finalize_type(context *ctx, partial_type *partial_ty);
@@ -1415,7 +1416,7 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
         partial_type partial_ty = {0};
         bool has_sq = false;
         while (1) {
-            if (parse_type_specifier(ctx, &partial_ty.ty)) {
+            if (parse_type_specifier(ctx, &partial_ty)) {
                 has_sq = true;
                 continue;
             } else if (parse_type_qualifier(
@@ -1500,29 +1501,54 @@ void parse_enumerator_list(context *ctx) {
     expect_punc(ctx, CURLY_CLOSE);
 }
 
-bool parse_type_specifier(context *ctx, const type **ty) {
-    struct primitive_type_specifier {
-        primitive_type type;
-        keyword name;
-    };
-
-    const struct primitive_type_specifier primitive_type_specifiers[] = {
-        {void_, void_kw},     {char_, char_kw}, {short_, short_kw},
-        {int_, int_kw},       {long_, long_kw}, {float_, float_kw},
-        {double_, double_kw},
-    };
-
-    for (size_t i = 0; i < array_length(primitive_type_specifiers); i++) {
-        if (check_keyword(ctx, primitive_type_specifiers[i].name)) {
-            *ty = &vector_at(type, &ctx->types,
-                             primitive_type_specifiers[i].type);
-            return true;
-        }
-    }
-
+bool parse_type_specifier(context *ctx, partial_type *ty) {
     if (peek(ctx).type == TOKEN_KEYWORD) {
-        keyword kw = next(ctx).kw;
-        if (kw == struct_kw || kw == union_kw) {
+        struct basic_type_specifier {
+            primitive_type type;
+            keyword name;
+        };
+
+        const struct basic_type_specifier primitive_type_specifiers[] = {
+            {void_, void_kw},   {char_, char_kw},     {int_, int_kw},
+            {float_, float_kw}, {double_, double_kw},
+        };
+
+        for (size_t i = 0; i < array_length(primitive_type_specifiers); i++) {
+            if (check_keyword(ctx, primitive_type_specifiers[i].name)) {
+                if (ty->specifier.basic_is_set) {
+                    // type already specified
+                    longjmp(ctx->error_jump, 1);
+                }
+                ty->specifier.basic_ty = primitive_type_specifiers[i].type;
+                return true;
+            }
+        }
+
+        if (check_keyword(ctx, signed_kw)) {
+            ty->specifier.is_signed = true;
+            return true;
+        } else if (check_keyword(ctx, unsigned_kw)) {
+            ty->specifier.is_unsigned = true;
+            return true;
+        } else if (check_keyword(ctx, long_kw)) {
+            if (ty->specifier.is_longlong) {
+                // long long already specified
+                longjmp(ctx->error_jump, 1);
+            }
+            ty->specifier.is_longlong = ty->specifier.is_long;
+            ty->specifier.is_long = true;
+            return true;
+        } else if (check_keyword(ctx, short_kw)) {
+            ty->specifier.is_short = true;
+            return true;
+        } else if (soft_check_keyword(ctx, struct_kw) ||
+                   soft_check_keyword(ctx, union_kw)) {
+            if (ty->specifier.ty) {
+                // type already specified
+                longjmp(ctx->error_jump, 1);
+            }
+
+            keyword kw = next(ctx).kw;
             string name = invalid_str;
             if (peek(ctx).type == TOKEN_IDENTIFIER) {
                 name = next(ctx).ident;
@@ -1548,13 +1574,15 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                     t->size = union_size;
                     for (int i = 0; i < t->structure.members.size; i++) {
                         // unions all start at 0(?)
+                        // this will have to revamped for anonymous struct
+                        // support
                         vector_at(member, &t->structure.members, i).offset = 0;
                     }
                 }
                 t->alignment = alignment;
                 vector_push(const type *, types, t);
 
-                *ty = t;
+                ty->specifier.ty = t;
                 return true;
             } else if (!string_is_valid(name)) {
                 // should be either a definition or a reference
@@ -1563,12 +1591,20 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                 for (size_t i = 0; i < types->size; i++) {
                     const type *t = vector_at(const type *, types, i);
                     if (string_equal(t->structure.name, name)) {
-                        *ty = t;
+                        ty->specifier.ty = t;
                         return true;
                     }
                 }
+
+                // type not found
+                longjmp(ctx->error_jump, 1);
             }
-        } else if (kw == enum_kw) {
+        } else if (check_keyword(ctx, enum_kw)) {
+            if (ty->specifier.ty) {
+                // type already specified
+                longjmp(ctx->error_jump, 1);
+            }
+
             string name = invalid_str;
             if (peek(ctx).type == TOKEN_IDENTIFIER) {
                 name = next(ctx).ident;
@@ -1588,7 +1624,7 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                 t->alignment = sizeof(int);
                 vector_push(const type *, &ctx->enums, t);
 
-                *ty = t;
+                ty->specifier.ty = t;
                 return true;
             } else if (!string_is_valid(name)) {
                 // should be either a definition or a reference
@@ -1597,10 +1633,13 @@ bool parse_type_specifier(context *ctx, const type **ty) {
                 for (size_t i = 0; i < ctx->enums.size; i++) {
                     const type *t = vector_at(const type *, &ctx->enums, i);
                     if (string_equal(t->structure.name, name)) {
-                        *ty = t;
+                        ty->specifier.ty = t;
                         return true;
                     }
                 }
+
+                // type not found
+                longjmp(ctx->error_jump, 1);
             }
         }
     }
@@ -1655,7 +1694,59 @@ const type *finalize_type(context *ctx, partial_type *partial_ty) {
         longjmp(ctx->error_jump, 1);
     }
 
-    *ty = *partial_ty->ty;
+    type_specifier spec = partial_ty->specifier;
+    if (!spec.ty) {
+        primitive_type basic_ty = spec.basic_is_set ? spec.basic_ty : int_;
+
+        // check error cases
+        if (spec.is_signed && spec.is_unsigned) {
+            // signed and unsigned cannot be combined
+            longjmp(ctx->error_jump, 1);
+        } else if (spec.is_long && spec.is_short) {
+            // long and short cannot be combined
+            longjmp(ctx->error_jump, 1);
+        } else if (basic_ty == float_ && (spec.is_long || spec.is_short ||
+                                          spec.is_unsigned || spec.is_signed)) {
+            // float cannot be combined with long, short, unsigned or signed
+            longjmp(ctx->error_jump, 1);
+        } else if (basic_ty == double_ &&
+                   (spec.is_longlong || spec.is_short || spec.is_unsigned ||
+                    spec.is_signed)) {
+            // double cannot be combined with long long, short, unsigned or
+            // signed
+            longjmp(ctx->error_jump, 1);
+        } else if (basic_ty == void_ && (spec.is_long || spec.is_short ||
+                                         spec.is_unsigned || spec.is_signed)) {
+            // void cannot be combined with long, short, unsigned or signed
+            longjmp(ctx->error_jump, 1);
+        } else if (basic_ty == char_ && (spec.is_long || spec.is_short)) {
+            // char cannot be combined with long or short
+            longjmp(ctx->error_jump, 1);
+        }
+
+        if (spec.is_short) {
+            basic_ty = short_;
+        } else if (spec.is_long) {
+            basic_ty = basic_ty == double_ ? long_double : long_;
+        } else if (spec.is_longlong) {
+            basic_ty = long_long;
+        }
+
+        if (spec.is_signed) {
+            basic_ty = basic_ty == char_ ? signed_char : basic_ty;
+        } else if (spec.is_unsigned) {
+            basic_ty = to_unsigned(basic_ty);
+        }
+
+        *ty = vector_at(type, &ctx->types, basic_ty);
+    } else {
+        if (spec.basic_is_set || spec.is_signed || spec.is_unsigned ||
+            spec.is_long || spec.is_short || spec.is_longlong) {
+            // type specifiers are not allowed for struct/union types
+            longjmp(ctx->error_jump, 1);
+        }
+        *ty = *spec.ty;
+    }
     ty->const_ = (partial_ty->type_qualifier_spec_mask & const_) != 0;
     ty->volatile_ = (partial_ty->type_qualifier_spec_mask & volatile_) != 0;
     if (partial_ty->type_qualifier_spec_mask & restrict_) {
@@ -1711,7 +1802,7 @@ bool parse_declaration_specifiers(context *ctx, partial_type *partial_ty) {
             continue;
         if (parse_type_qualifier(ctx, &partial_ty->type_qualifier_spec_mask))
             continue;
-        if (parse_type_specifier(ctx, &partial_ty->ty))
+        if (parse_type_specifier(ctx, partial_ty))
             continue;
 
         break;
