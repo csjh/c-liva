@@ -530,9 +530,11 @@ char get_quoted_char(context *ctx) {
         // simple escape sequences
         char escaped[] = {'\'', '"', '?', '\\', 'a', 'b',
                           'f',  'n', 'r', 't',  'v'};
+        char unescaped[] = {'\'', '\"', '\?', '\\', '\a', '\b',
+                            '\f', '\n', '\r', '\t', '\v'};
         for (size_t i = 0; i < sizeof(escaped); i++) {
             if (c == escaped[i]) {
-                return escaped[i];
+                return unescaped[i];
             }
         }
         // octal escape sequence
