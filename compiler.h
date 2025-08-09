@@ -66,12 +66,17 @@ static inline bool to_unsigned(primitive_type type) {
 
 typedef enum type_classification {
     basic,
+    enumerated,
     array,
     structure, // struct or union
     function,
     pointer,
     // todo: atomic
 } type_classification;
+
+typedef struct enumerated_type {
+    string name;
+} enumerated_type;
 
 typedef struct array_type {
     const struct type *element_type;
@@ -114,6 +119,7 @@ typedef struct type {
     type_classification tag;
     union {
         primitive_type primitive;
+        enumerated_type enumerated;
         array_type array;
         structure_type structure;
         function_type function;

@@ -203,6 +203,10 @@ void print_type(const type *ty) {
             printf("(unknown primitive %d)", ty->primitive);
         }
         break;
+    case enumerated:
+        printf("enum %.*s", (int)ty->enumerated.name.length,
+               ty->enumerated.name.data);
+        break;
     case array:
         print_type(ty->array.element_type);
         printf("[%zu]", ty->array.length);
@@ -1640,8 +1644,8 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
                     longjmp(ctx->error_jump, 1);
                 }
                 t->id = ctx->enums.size;
-                t->tag = structure;
-                t->structure = (structure_type){.name = name, .members = {0}};
+                t->tag = enumerated;
+                t->enumerated = (enumerated_type){.name = name};
 
                 t->size = sizeof(int);
                 t->alignment = sizeof(int);
@@ -1655,7 +1659,7 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
             } else {
                 for (size_t i = 0; i < ctx->enums.size; i++) {
                     const type *t = vector_at(const type *, &ctx->enums, i);
-                    if (string_equal(t->structure.name, name)) {
+                    if (string_equal(t->enumerated.name, name)) {
                         ty->specifier.ty = t;
                         return true;
                     }
