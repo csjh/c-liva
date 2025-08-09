@@ -547,7 +547,7 @@ char get_quoted_char(context *ctx) {
         }
 
         // unknown escape sequence
-        longjmp(ctx->error_jump, 1);
+        return c;
     } else {
         return next_char(ctx);
     }
