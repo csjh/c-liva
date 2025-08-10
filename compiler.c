@@ -1584,32 +1584,32 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
             vector *types = is_struct ? &ctx->structs : &ctx->unions;
             if (check_punc(ctx, CURLY_OPEN)) {
                 // definition
-                type *t = calloc(1, sizeof(type));
-                if (!t) {
-                    longjmp(ctx->error_jump, 1);
-                }
-                t->id = types->size;
-                t->tag = structure;
-                t->structure = (structure_type){.name = name, .members = {0}};
+                type t = {0};
+                t.id = types->size;
+                t.tag = structure;
+                t.structure = (structure_type){.name = name, .members = {0}};
 
                 size_t struct_size, union_size, alignment;
-                t->structure.members = parse_struct_declaration_list(
+                t.structure.members = parse_struct_declaration_list(
                     ctx, &struct_size, &union_size, &alignment);
                 if (is_struct) {
-                    t->size = struct_size;
+                    t.size = struct_size;
                 } else {
-                    t->size = union_size;
-                    for (int i = 0; i < t->structure.members.size; i++) {
+                    t.size = union_size;
+                    for (int i = 0; i < t.structure.members.size; i++) {
                         // unions all start at 0(?)
                         // this will have to revamped for anonymous struct
                         // support
-                        vector_at(member, &t->structure.members, i).offset = 0;
+                        vector_at(member, &t.structure.members, i).offset = 0;
                     }
                 }
-                t->alignment = alignment;
-                vector_push(const type *, types, t);
+                t.alignment = alignment;
+                vector_push(type, &ctx->types, t);
 
-                ty->specifier.ty = t;
+                const type *new_type = &vector_last(type, &ctx->types);
+                vector_push(const type *, types, new_type);
+
+                ty->specifier.ty = new_type;
                 return true;
             } else if (!string_is_valid(name)) {
                 // should be either a definition or a reference
@@ -1639,19 +1639,19 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
             if (check_punc(ctx, CURLY_OPEN)) {
                 parse_enumerator_list(ctx);
 
-                type *t = calloc(1, sizeof(type));
-                if (!t) {
-                    longjmp(ctx->error_jump, 1);
-                }
-                t->id = ctx->enums.size;
-                t->tag = enumerated;
-                t->enumerated = (enumerated_type){.name = name};
+                type t = {0};
+                t.id = ctx->enums.size;
+                t.tag = enumerated;
+                t.enumerated = (enumerated_type){.name = name};
 
-                t->size = sizeof(int);
-                t->alignment = sizeof(int);
-                vector_push(const type *, &ctx->enums, t);
+                t.size = sizeof(int);
+                t.alignment = sizeof(int);
+                vector_push(type, &ctx->types, t);
 
-                ty->specifier.ty = t;
+                const type *new_type = &vector_last(type, &ctx->types);
+                vector_push(const type *, &ctx->enums, new_type);
+
+                ty->specifier.ty = new_type;
                 return true;
             } else if (!string_is_valid(name)) {
                 // should be either a definition or a reference
@@ -1670,7 +1670,7 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
             }
         }
     } else if (peek(ctx).type == TOKEN_IDENTIFIER) {
-        string ident = next(ctx).ident;
+        string ident = peek(ctx).ident;
 
         for (size_t i = 0; i < ctx->typedefs.size; i++) {
             alias al = vector_at(alias, &ctx->typedefs, i);
@@ -1679,13 +1679,11 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
                     // type already specified
                     longjmp(ctx->error_jump, 1);
                 }
+                next(ctx); // consume identifier
                 ty->specifier.ty = al.ty;
                 return true;
             }
         }
-
-        // type not found
-        longjmp(ctx->error_jump, 1);
     }
 
     return false;
@@ -1733,10 +1731,7 @@ bool parse_alignment_specifier(context *ctx, size_t *align) {
 }
 
 const type *finalize_type(context *ctx, partial_type *partial_ty) {
-    type *ty = calloc(1, sizeof(type));
-    if (!ty) {
-        longjmp(ctx->error_jump, 1);
-    }
+    type ty = {0};
 
     type_specifier spec = partial_ty->specifier;
     if (!spec.ty) {
@@ -1782,27 +1777,28 @@ const type *finalize_type(context *ctx, partial_type *partial_ty) {
             basic_ty = to_unsigned(basic_ty);
         }
 
-        *ty = vector_at(type, &ctx->types, basic_ty);
+        ty = vector_at(type, &ctx->types, basic_ty);
     } else {
         if (spec.basic_is_set || spec.is_signed || spec.is_unsigned ||
             spec.is_long || spec.is_short || spec.is_longlong) {
             // type specifiers are not allowed for struct/union types
             longjmp(ctx->error_jump, 1);
         }
-        *ty = *spec.ty;
+        ty = *spec.ty;
     }
-    ty->const_ = (partial_ty->type_qualifier_spec_mask & const_) != 0;
-    ty->volatile_ = (partial_ty->type_qualifier_spec_mask & volatile_) != 0;
+    ty.const_ = (partial_ty->type_qualifier_spec_mask & const_) != 0;
+    ty.volatile_ = (partial_ty->type_qualifier_spec_mask & volatile_) != 0;
     if (partial_ty->type_qualifier_spec_mask & restrict_) {
-        if (ty->tag != pointer) {
+        if (ty.tag != pointer) {
             // restrict is only valid for pointers
             longjmp(ctx->error_jump, 1);
         } else {
-            ty->pointer.restrict_ = true;
+            ty.pointer.restrict_ = true;
         }
     }
 
-    return ty;
+    vector_push(type, &ctx->types, ty);
+    return &vector_last(type, &ctx->types);
 }
 
 void parse_pointer_opt(context *ctx, const type **ty) {
@@ -1812,23 +1808,21 @@ void parse_pointer_opt(context *ctx, const type **ty) {
     while (parse_type_qualifier(ctx, &mask)) {
     }
 
-    type *pointer_ty = calloc(1, sizeof(type));
-    if (!pointer_ty) {
-        longjmp(ctx->error_jump, 1);
-    }
+    type pointer_ty = {0};
 
-    pointer_ty->tag = pointer;
-    pointer_ty->pointer.restrict_ = false; // default to false
-    pointer_ty->pointer.ty = *ty;
-
-    *ty = pointer_ty;
+    pointer_ty.tag = pointer;
+    pointer_ty.pointer.restrict_ = false; // default to false
+    pointer_ty.pointer.ty = *ty;
 
     if (mask & restrict_)
-        pointer_ty->pointer.restrict_ = true;
+        pointer_ty.pointer.restrict_ = true;
     if (mask & const_)
-        pointer_ty->const_ = true;
+        pointer_ty.const_ = true;
     if (mask & volatile_)
-        pointer_ty->volatile_ = true;
+        pointer_ty.volatile_ = true;
+
+    vector_push(type, &ctx->types, pointer_ty);
+    *ty = &vector_last(type, &ctx->types);
 
     if (check_punc(ctx, STAR)) {
         return parse_pointer_opt(ctx, ty);
@@ -1905,29 +1899,25 @@ declarator parse_direct_declarator(context *ctx, const type *ty,
         uint64_t length = parse_constant_expression(ctx);
         expect_punc(ctx, BRACKET_CLOSE);
 
-        type *array_ty = calloc(1, sizeof(type));
-        if (!array_ty) {
-            longjmp(ctx->error_jump, 1);
-        }
+        type array_ty = {0};
 
-        array_ty->tag = array;
-        array_ty->array.element_type = ty;
-        array_ty->array.length = length;
+        array_ty.tag = array;
+        array_ty.array.element_type = ty;
+        array_ty.array.length = length;
 
-        ty = array_ty;
+        vector_push(type, &ctx->types, array_ty);
+        ty = &vector_last(type, &ctx->types);
     } else if (check_punc(ctx, PAREN_OPEN)) {
         owned_span params = parse_parameter_list(ctx);
 
-        type *func_ty = calloc(1, sizeof(type));
-        if (!func_ty) {
-            longjmp(ctx->error_jump, 1);
-        }
+        type func_ty = {0};
 
-        func_ty->tag = function;
-        func_ty->function.return_type = ty;
-        func_ty->function.parameters = params;
+        func_ty.tag = function;
+        func_ty.function.return_type = ty;
+        func_ty.function.parameters = params;
 
-        ty = func_ty;
+        vector_push(type, &ctx->types, func_ty);
+        ty = &vector_last(type, &ctx->types);
     }
 
     return (declarator){.name = ident, .ty = ty, .initializer = {0}};
