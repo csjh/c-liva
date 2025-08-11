@@ -12,9 +12,9 @@ typedef struct vector {
 } vector;
 
 static void vector_grow(vector *vec, size_t type_size) {
-    size_t new_capacity = (vec)->capacity ? (vec)->capacity * 2 : 1;
-    (vec)->data = realloc((vec)->data, new_capacity * type_size);
-    (vec)->capacity = new_capacity;
+    size_t new_capacity = vec->capacity ? vec->capacity * 2 : 1;
+    vec->data = realloc(vec->data, new_capacity * type_size);
+    vec->capacity = new_capacity;
 }
 
 #define vector_at(type, vec, index) ((type *)((vec)->data))[index]
