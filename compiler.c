@@ -1615,6 +1615,7 @@ bool parse_type_specifier(context *ctx, partial_type *ty) {
                 // should be either a definition or a reference
                 longjmp(ctx->error_jump, 1);
             } else {
+                // todo: handle incomplete types
                 for (size_t i = 0; i < types->size; i++) {
                     const type *t = vector_at(const type *, types, i);
                     if (string_equal(t->structure.name, name)) {
