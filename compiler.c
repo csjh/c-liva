@@ -1864,10 +1864,6 @@ owned_span parse_parameter_list(context *ctx) {
 
     while (!check_punc(ctx, PAREN_CLOSE)) {
         declarator decl = parse_parameter_declaration(ctx);
-        if (decl.initializer.ty != NULL) {
-            // default argument values are not supported
-            longjmp(ctx->error_jump, 1);
-        }
 
         vector_push(declarator, &params, decl);
         if (!soft_check_punc(ctx, PAREN_CLOSE)) {
