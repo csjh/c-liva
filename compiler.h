@@ -113,6 +113,8 @@ typedef struct type {
     // todo: this is very poorly handled rn
     uint32_t alignment;
 
+    bool is_complete;
+
     bool const_;
     bool volatile_;
 

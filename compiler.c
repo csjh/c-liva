@@ -115,6 +115,19 @@ void raw_mov(vector *code, bool sf, ireg src, ireg dst) {
     raw_orr(code, sf, lsl, src, 0, xzr, dst);
 }
 
+typedef enum ftype {
+    single_precision = 0b00, // Single-precision
+    double_precision = 0b01, // Double-precision
+    big = 0b10,              // 128 bit
+    half = 0b11,             // Half-precision
+} ftype;
+
+void raw_fadd(vector *code, ftype ft, freg rm, freg rn, freg rd) {
+    vector_push(uint32_t, code,
+                0b00011110001000000010100000000000 | (uint32_t)ft << 22 |
+                    (uint32_t)rm << 16 | (uint32_t)rn << 5 | (uint32_t)rd << 0);
+}
+
 void raw_restoring_return(vector *code) {
     raw_ldp(code, true, offset, 0, x30, sp, x29);
     vector_push(uint32_t, code, 0b11010110010111110000001111000000);
@@ -136,10 +149,20 @@ void force_into_ireg(regallocator *regs, vector *code, struct value *v) {
     assert(v->loc == reg);
 }
 
-int current_reg = 3;
+void force_into_freg(regallocator *regs, vector *code, struct value *v) {
+    assert(v->loc == reg);
+}
+
+int current_ireg = 3;
 
 ireg get_new_ireg(regallocator *regs, vector *code) {
-    return (ireg)current_reg++;
+    return (ireg)current_ireg++;
+}
+
+int current_freg = 3;
+
+freg get_new_freg(regallocator *regs, vector *code) {
+    return (freg)current_freg++;
 }
 
 void print_type(const type *ty) {
@@ -914,9 +937,52 @@ void expect_keyword(context *ctx, keyword kw) {
     }
 }
 
+bool is_integer_type(const type *ty) {
+    if (ty->tag == enumerated)
+        return true;
+    if (ty->tag != basic)
+        return false;
+
+    switch (ty->primitive) {
+    case bool_:
+    case signed_char:
+    case char_:
+    case unsigned_char:
+    case short_:
+    case unsigned_short:
+    case int_:
+    case unsigned_int:
+    case long_:
+    case unsigned_long:
+    case long_long:
+    case unsigned_long_long:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool is_floating_type(const type *ty) {
+    if (ty->tag != basic)
+        return false;
+    return ty->primitive == float_ || ty->primitive == double_ ||
+           ty->primitive == long_double;
+}
+
+bool is_arithmetic_type(const type *ty) {
+    return is_integer_type(ty) || is_floating_type(ty);
+}
+
+bool is_pointer_type(const type *ty) { return ty->tag == pointer; }
+
+bool is_complete_object_type(const type *ty) { return ty->is_complete; }
+
 void undergo_integer_promotion(context *ctx, const type **ty) {
-    if ((*ty)->tag != basic)
-        return;
+    if (!is_arithmetic_type(*ty))
+        longjmp(ctx->error_jump, 1);
+
+    if ((*ty)->tag == enumerated)
+        *ty = &vector_at(type, &ctx->types, int_);
 
     static const primitive_type below_integers[] = {
         bool_, signed_char, char_, unsigned_char, short_, unsigned_short,
@@ -932,8 +998,8 @@ void undergo_integer_promotion(context *ctx, const type **ty) {
 
 void undergo_arithmetic_conversion(context *ctx, const type **ty1,
                                    const type **ty2) {
-    if ((*ty1)->tag != basic || (*ty2)->tag != basic)
-        return;
+    if (!is_arithmetic_type(*ty1) || !is_arithmetic_type(*ty2))
+        longjmp(ctx->error_jump, 1);
 
     if ((*ty1)->primitive == (*ty2)->primitive)
         return;
@@ -1171,18 +1237,73 @@ value parse_additive_expression(context *ctx) {
         if (check_punc(ctx, PLUS)) {
             value right = parse_multiplicative_expression(ctx);
 
-            force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
-            force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
-            ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+            if (is_pointer_type(left.ty) || is_pointer_type(right.ty)) {
+                // pointer arithmetic
+                if (is_pointer_type(left.ty) && is_pointer_type(right.ty)) {
+                    longjmp(ctx->error_jump, 1);
+                }
 
-            raw_add(&ctx->macho.code, false, left.ireg, right.ireg, output, lsl,
-                    0);
+                value *ptr = is_pointer_type(left.ty) ? &left : &right;
+                value *offset = is_pointer_type(left.ty) ? &right : &left;
 
-            left = (value){
-                .ty = left.ty,
-                .ireg = output,
-                .is_constant = left.is_constant && right.is_constant,
-            };
+                if (!is_integer_type(offset->ty)) {
+                    // expected integer type for pointer arithmetic
+                    longjmp(ctx->error_jump, 1);
+                }
+
+                if (!is_complete_object_type(ptr->ty->pointer.ty)) {
+                    // expected complete object type for pointer arithmetic
+                    longjmp(ctx->error_jump, 1);
+                }
+
+                // todo: convert offset to signed 64 bit
+                force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
+                force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
+                ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+                // todo:
+                // move type size into a register
+                // muladd ptr = <ptr> + <offset> * <type size>
+
+                left = (value){
+                    .ty = left.ty,
+                    .ireg = output,
+                    .is_constant = left.is_constant && right.is_constant,
+                };
+            } else {
+                // neither types are pointers, should be an arithmetic addition
+                undergo_arithmetic_conversion(ctx, &left.ty, &right.ty);
+
+                if (is_integer_type(left.ty)) {
+                    force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
+                    force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
+                    ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+                    assert(left.ty->size == sizeof(uint32_t) ||
+                           left.ty->size == sizeof(uint64_t));
+                    raw_add(&ctx->macho.code, left.ty->size == sizeof(uint64_t),
+                            left.ireg, right.ireg, output, lsl, 0);
+
+                    left = (value){
+                        .ty = left.ty,
+                        .ireg = output,
+                        .is_constant = left.is_constant && right.is_constant,
+                    };
+                } else {
+                    force_into_freg(&ctx->regs, &ctx->macho.code, &left);
+                    force_into_freg(&ctx->regs, &ctx->macho.code, &right);
+                    freg output = get_new_freg(&ctx->regs, &ctx->macho.code);
+
+                    raw_fadd(&ctx->macho.code, left.ty->primitive == double_,
+                             left.freg, right.freg, output);
+
+                    left = (value){
+                        .ty = left.ty,
+                        .freg = output,
+                        .is_constant = left.is_constant && right.is_constant,
+                    };
+                }
+            }
         } else if (check_punc(ctx, MINUS)) {
             value right = parse_multiplicative_expression(ctx);
             // do something with left and right
