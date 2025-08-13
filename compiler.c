@@ -962,6 +962,10 @@ bool is_integer_type(const type *ty) {
     }
 }
 
+bool is_constexpr(value *v1, value *v2) {
+    return v1->is_constant && v2->is_constant;
+}
+
 bool is_floating_type(const type *ty) {
     if (ty->tag != basic)
         return false;
@@ -1256,52 +1260,84 @@ value parse_additive_expression(context *ctx) {
                     longjmp(ctx->error_jump, 1);
                 }
 
-                // todo: convert offset to signed 64 bit
-                force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
-                force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
-                ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+                if (is_constexpr(ptr, offset)) {
+                    left = (value){
+                        .ty = ptr->ty,
+                        .loc = cons,
+                        .integer = ptr->integer +
+                                   offset->integer * ptr->ty->pointer.ty->size,
+                        .is_constant = true,
+                    };
+                } else {
+                    // todo: convert offset to signed 64 bit
+                    force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
+                    force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
+                    ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
 
-                // todo:
-                // move type size into a register
-                // muladd ptr = <ptr> + <offset> * <type size>
+                    // todo:
+                    // move type size into a register
+                    // muladd ptr = <ptr> + <offset> * <type size>
 
-                left = (value){
-                    .ty = left.ty,
-                    .ireg = output,
-                    .is_constant = left.is_constant && right.is_constant,
-                };
+                    left = (value){
+                        .ty = ptr->ty,
+                        .ireg = output,
+                        .is_constant = false,
+                    };
+                }
             } else {
                 // neither types are pointers, should be an arithmetic addition
                 undergo_arithmetic_conversion(ctx, &left.ty, &right.ty);
 
                 if (is_integer_type(left.ty)) {
-                    force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
-                    force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
-                    ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+                    if (is_constexpr(&left, &right)) {
+                        left = (value){
+                            .ty = left.ty,
+                            .loc = cons,
+                            .integer = left.integer + right.integer,
+                            .is_constant = true,
+                        };
+                    } else {
+                        force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
+                        force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
+                        ireg output =
+                            get_new_ireg(&ctx->regs, &ctx->macho.code);
 
-                    assert(left.ty->size == sizeof(uint32_t) ||
-                           left.ty->size == sizeof(uint64_t));
-                    raw_add(&ctx->macho.code, left.ty->size == sizeof(uint64_t),
-                            left.ireg, right.ireg, output, lsl, 0);
+                        assert(left.ty->size == sizeof(uint32_t) ||
+                               left.ty->size == sizeof(uint64_t));
+                        raw_add(&ctx->macho.code,
+                                left.ty->size == sizeof(uint64_t), left.ireg,
+                                right.ireg, output, lsl, 0);
 
-                    left = (value){
-                        .ty = left.ty,
-                        .ireg = output,
-                        .is_constant = left.is_constant && right.is_constant,
-                    };
+                        left = (value){
+                            .ty = left.ty,
+                            .ireg = output,
+                            .is_constant = false,
+                        };
+                    }
                 } else {
-                    force_into_freg(&ctx->regs, &ctx->macho.code, &left);
-                    force_into_freg(&ctx->regs, &ctx->macho.code, &right);
-                    freg output = get_new_freg(&ctx->regs, &ctx->macho.code);
+                    if (is_constexpr(&left, &right)) {
+                        left = (value){
+                            .ty = left.ty,
+                            .loc = cons,
+                            .fp = left.fp + right.fp,
+                            .is_constant = true,
+                        };
+                    } else {
+                        force_into_freg(&ctx->regs, &ctx->macho.code, &left);
+                        force_into_freg(&ctx->regs, &ctx->macho.code, &right);
+                        freg output =
+                            get_new_freg(&ctx->regs, &ctx->macho.code);
 
-                    raw_fadd(&ctx->macho.code, left.ty->primitive == double_,
-                             left.freg, right.freg, output);
+                        raw_fadd(&ctx->macho.code,
+                                 left.ty->primitive == double_, left.freg,
+                                 right.freg, output);
 
-                    left = (value){
-                        .ty = left.ty,
-                        .freg = output,
-                        .is_constant = left.is_constant && right.is_constant,
-                    };
+                        left = (value){
+                            .ty = left.ty,
+                            .freg = output,
+                            .is_constant = false,
+                        };
+                    }
                 }
             }
         } else if (check_punc(ctx, MINUS)) {
