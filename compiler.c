@@ -1263,10 +1263,10 @@ value parse_additive_expression(context *ctx) {
                 if (is_constexpr(ptr, offset)) {
                     left = (value){
                         .ty = ptr->ty,
+                        .is_constant = true,
                         .loc = cons,
                         .integer = ptr->integer +
                                    offset->integer * ptr->ty->pointer.ty->size,
-                        .is_constant = true,
                     };
                 } else {
                     // todo: convert offset to signed 64 bit
@@ -1280,8 +1280,9 @@ value parse_additive_expression(context *ctx) {
 
                     left = (value){
                         .ty = ptr->ty,
-                        .ireg = output,
                         .is_constant = false,
+                        .loc = reg,
+                        .ireg = output,
                     };
                 }
             } else {
@@ -1292,9 +1293,9 @@ value parse_additive_expression(context *ctx) {
                     if (is_constexpr(&left, &right)) {
                         left = (value){
                             .ty = left.ty,
+                            .is_constant = true,
                             .loc = cons,
                             .integer = left.integer + right.integer,
-                            .is_constant = true,
                         };
                     } else {
                         force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
@@ -1310,17 +1311,18 @@ value parse_additive_expression(context *ctx) {
 
                         left = (value){
                             .ty = left.ty,
-                            .ireg = output,
                             .is_constant = false,
+                            .loc = reg,
+                            .ireg = output,
                         };
                     }
                 } else {
                     if (is_constexpr(&left, &right)) {
                         left = (value){
                             .ty = left.ty,
+                            .is_constant = true,
                             .loc = cons,
                             .fp = left.fp + right.fp,
-                            .is_constant = true,
                         };
                     } else {
                         force_into_freg(&ctx->regs, &ctx->macho.code, &left);
@@ -1334,8 +1336,9 @@ value parse_additive_expression(context *ctx) {
 
                         left = (value){
                             .ty = left.ty,
-                            .freg = output,
                             .is_constant = false,
+                            .loc = reg,
+                            .freg = output,
                         };
                     }
                 }
