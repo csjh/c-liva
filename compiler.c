@@ -2169,7 +2169,7 @@ void parse_do_while_statement(context *ctx) {
 
 void parse_for_statement(context *ctx) {
     expect_punc(ctx, PAREN_OPEN);
-    owned_span declarations;
+    owned_span declarations = {0};
     if (!parse_declaration(ctx, &declarations)) {
         parse_expression(ctx);
     }
@@ -2216,7 +2216,7 @@ void parse_compound_statement(context *ctx) {
     // assume guarded by check_punc(ctx, CURLY_OPEN)
 
     while (!check_punc(ctx, CURLY_CLOSE)) {
-        owned_span declarations;
+        owned_span declarations = {0};
         if (!parse_declaration(ctx, &declarations)) {
             parse_statement(ctx);
         } else {
@@ -2288,7 +2288,7 @@ void add_function_definition(context *ctx, const declarator *decl) {
 }
 
 void parse_external_declaration(context *ctx) {
-    owned_span declarations;
+    owned_span declarations = {0};
     if (!parse_declaration(ctx, &declarations)) {
         longjmp(ctx->error_jump, 1);
     }
