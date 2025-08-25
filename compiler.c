@@ -1312,7 +1312,7 @@ value handle_addition(context *ctx, value *left, value *right) {
                 .ireg = output,
             };
         }
-    } else {
+    } else if (is_arithmetic_type(left->ty) && is_arithmetic_type(right->ty)) {
         // neither types are pointers, should be an arithmetic addition
         undergo_arithmetic_conversion(ctx, &left->ty, &right->ty);
 
@@ -1365,6 +1365,12 @@ value handle_addition(context *ctx, value *left, value *right) {
                 };
             }
         }
+    } else {
+        // invalid types for addition
+        longjmp(ctx->error_jump, 1);
+    }
+}
+
     }
 }
 
