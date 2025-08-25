@@ -1267,115 +1267,114 @@ value parse_multiplicative_expression(context *ctx) {
     return left;
 }
 
+value handle_addition(context *ctx, value *left, value *right) {
+    if (is_pointer_type(left->ty) || is_pointer_type(right->ty)) {
+        // pointer arithmetic
+        if (is_pointer_type(left->ty) && is_pointer_type(right->ty)) {
+            longjmp(ctx->error_jump, 1);
+        }
+
+        value *ptr = is_pointer_type(left->ty) ? left : right;
+        value *offset = is_pointer_type(left->ty) ? right : left;
+
+        if (!is_integer_type(offset->ty)) {
+            // expected integer type for pointer arithmetic
+            longjmp(ctx->error_jump, 1);
+        }
+
+        if (!is_complete_object_type(ptr->ty->pointer.ty)) {
+            // expected complete object type for pointer arithmetic
+            longjmp(ctx->error_jump, 1);
+        }
+
+        if (is_constexpr(ptr, offset)) {
+            return (value){
+                .ty = ptr->ty,
+                .is_constant = true,
+                .loc = cons,
+                .integer =
+                    ptr->integer + offset->integer * ptr->ty->pointer.ty->size,
+            };
+        } else {
+            // todo: convert offset to signed 64 bit
+            force_into_ireg(&ctx->regs, &ctx->macho.code, left);
+            force_into_ireg(&ctx->regs, &ctx->macho.code, right);
+            ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+            // todo:
+            // move type size into a register
+            // muladd ptr = <ptr> + <offset> * <type size>
+
+            return (value){
+                .ty = ptr->ty,
+                .is_constant = false,
+                .loc = reg,
+                .ireg = output,
+            };
+        }
+    } else {
+        // neither types are pointers, should be an arithmetic addition
+        undergo_arithmetic_conversion(ctx, &left->ty, &right->ty);
+
+        if (is_integer_type(left->ty)) {
+            if (is_constexpr(left, right)) {
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = true,
+                    .loc = cons,
+                    .integer = left->integer + right->integer,
+                };
+            } else {
+                force_into_ireg(&ctx->regs, &ctx->macho.code, left);
+                force_into_ireg(&ctx->regs, &ctx->macho.code, right);
+                ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+                assert(left->ty->size == sizeof(uint32_t) ||
+                       left->ty->size == sizeof(uint64_t));
+                raw_add(&ctx->macho.code, left->ty->size == sizeof(uint64_t),
+                        left->ireg, right->ireg, output, lsl, 0);
+
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = false,
+                    .loc = reg,
+                    .ireg = output,
+                };
+            }
+        } else {
+            if (is_constexpr(left, right)) {
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = true,
+                    .loc = cons,
+                    .fp = left->fp + right->fp,
+                };
+            } else {
+                force_into_freg(&ctx->regs, &ctx->macho.code, left);
+                force_into_freg(&ctx->regs, &ctx->macho.code, right);
+                freg output = get_new_freg(&ctx->regs, &ctx->macho.code);
+
+                raw_fadd(&ctx->macho.code, left->ty->primitive == double_,
+                         left->freg, right->freg, output);
+
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = false,
+                    .loc = reg,
+                    .freg = output,
+                };
+            }
+        }
+    }
+}
+
 value parse_additive_expression(context *ctx) {
     value left = parse_multiplicative_expression(ctx);
 
     while (true) {
         if (check_punc(ctx, PLUS)) {
             value right = parse_multiplicative_expression(ctx);
-
-            if (is_pointer_type(left.ty) || is_pointer_type(right.ty)) {
-                // pointer arithmetic
-                if (is_pointer_type(left.ty) && is_pointer_type(right.ty)) {
-                    longjmp(ctx->error_jump, 1);
-                }
-
-                value *ptr = is_pointer_type(left.ty) ? &left : &right;
-                value *offset = is_pointer_type(left.ty) ? &right : &left;
-
-                if (!is_integer_type(offset->ty)) {
-                    // expected integer type for pointer arithmetic
-                    longjmp(ctx->error_jump, 1);
-                }
-
-                if (!is_complete_object_type(ptr->ty->pointer.ty)) {
-                    // expected complete object type for pointer arithmetic
-                    longjmp(ctx->error_jump, 1);
-                }
-
-                if (is_constexpr(ptr, offset)) {
-                    left = (value){
-                        .ty = ptr->ty,
-                        .is_constant = true,
-                        .loc = cons,
-                        .integer = ptr->integer +
-                                   offset->integer * ptr->ty->pointer.ty->size,
-                    };
-                } else {
-                    // todo: convert offset to signed 64 bit
-                    force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
-                    force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
-                    ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
-
-                    // todo:
-                    // move type size into a register
-                    // muladd ptr = <ptr> + <offset> * <type size>
-
-                    left = (value){
-                        .ty = ptr->ty,
-                        .is_constant = false,
-                        .loc = reg,
-                        .ireg = output,
-                    };
-                }
-            } else {
-                // neither types are pointers, should be an arithmetic addition
-                undergo_arithmetic_conversion(ctx, &left.ty, &right.ty);
-
-                if (is_integer_type(left.ty)) {
-                    if (is_constexpr(&left, &right)) {
-                        left = (value){
-                            .ty = left.ty,
-                            .is_constant = true,
-                            .loc = cons,
-                            .integer = left.integer + right.integer,
-                        };
-                    } else {
-                        force_into_ireg(&ctx->regs, &ctx->macho.code, &left);
-                        force_into_ireg(&ctx->regs, &ctx->macho.code, &right);
-                        ireg output =
-                            get_new_ireg(&ctx->regs, &ctx->macho.code);
-
-                        assert(left.ty->size == sizeof(uint32_t) ||
-                               left.ty->size == sizeof(uint64_t));
-                        raw_add(&ctx->macho.code,
-                                left.ty->size == sizeof(uint64_t), left.ireg,
-                                right.ireg, output, lsl, 0);
-
-                        left = (value){
-                            .ty = left.ty,
-                            .is_constant = false,
-                            .loc = reg,
-                            .ireg = output,
-                        };
-                    }
-                } else {
-                    if (is_constexpr(&left, &right)) {
-                        left = (value){
-                            .ty = left.ty,
-                            .is_constant = true,
-                            .loc = cons,
-                            .fp = left.fp + right.fp,
-                        };
-                    } else {
-                        force_into_freg(&ctx->regs, &ctx->macho.code, &left);
-                        force_into_freg(&ctx->regs, &ctx->macho.code, &right);
-                        freg output =
-                            get_new_freg(&ctx->regs, &ctx->macho.code);
-
-                        raw_fadd(&ctx->macho.code,
-                                 left.ty->primitive == double_, left.freg,
-                                 right.freg, output);
-
-                        left = (value){
-                            .ty = left.ty,
-                            .is_constant = false,
-                            .loc = reg,
-                            .freg = output,
-                        };
-                    }
-                }
-            }
+            left = handle_addition(ctx, &left, &right);
         } else if (check_punc(ctx, MINUS)) {
             value right = parse_multiplicative_expression(ctx);
             // do something with left and right
