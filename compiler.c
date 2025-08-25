@@ -1065,7 +1065,40 @@ void undergo_arithmetic_conversion(context *ctx, const type **ty1,
 value parse_expression(context *ctx);
 value parse_assignment_expression(context *ctx);
 
-const type *parse_type_name(context *ctx) { return NULL; }
+typedef enum abstract_allowance {
+    either,
+    strict_abstract,
+    strict_nonabstract
+} abstract_allowance;
+
+bool parse_type_specifier(context *ctx, partial_type *ty);
+bool parse_type_qualifier(context *ctx, type_qualifier *mask);
+declarator parse_declarator(context *ctx, const type *ty,
+                            abstract_allowance abs_allowance);
+const type *finalize_type(context *ctx, partial_type *partial_ty);
+
+bool parse_specifier_qualifier_list(context *ctx, partial_type *partial_ty) {
+    bool has_specifiers = false;
+    for (;; has_specifiers = true) {
+        if (parse_type_qualifier(ctx, &partial_ty->type_qualifier_spec_mask))
+            continue;
+        if (parse_type_specifier(ctx, partial_ty))
+            continue;
+
+        break;
+    }
+    return has_specifiers;
+}
+
+const type *parse_type_name(context *ctx) {
+    partial_type partial_ty = {0};
+    if (!parse_specifier_qualifier_list(ctx, &partial_ty)) {
+        return NULL;
+    }
+    const type *ty = finalize_type(ctx, &partial_ty);
+
+    return parse_declarator(ctx, ty, strict_abstract).ty;
+}
 
 value parse_primary_expression(context *ctx) {
     token tok = next(ctx);
@@ -1587,11 +1620,6 @@ bool parse_storage_class_specifier(context *ctx,
     return false;
 }
 
-bool parse_type_specifier(context *ctx, partial_type *ty);
-bool parse_type_qualifier(context *ctx, type_qualifier *mask);
-declarator parse_declarator(context *ctx, const type *ty, bool abstract);
-const type *finalize_type(context *ctx, partial_type *partial_ty);
-
 owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
                                          size_t *union_size,
                                          size_t *alignment) {
@@ -1601,25 +1629,13 @@ owned_span parse_struct_declaration_list(context *ctx, size_t *struct_size,
 
     do {
         partial_type partial_ty = {0};
-        bool has_sq = false;
-        while (1) {
-            if (parse_type_specifier(ctx, &partial_ty)) {
-                has_sq = true;
-                continue;
-            } else if (parse_type_qualifier(
-                           ctx, &partial_ty.type_qualifier_spec_mask)) {
-                has_sq = true;
-                continue;
-            } else if (!has_sq) {
-                // expected type specifier or type qualifier
-                longjmp(ctx->error_jump, 1);
-            } else {
-                break;
-            }
+        if (!parse_specifier_qualifier_list(ctx, &partial_ty)) {
+            // expected type specifier or type qualifier
+            longjmp(ctx->error_jump, 1);
         }
         const type *ty = finalize_type(ctx, &partial_ty);
         do {
-            declarator decl = parse_declarator(ctx, ty, true);
+            declarator decl = parse_declarator(ctx, ty, either);
             // ^^ abstract declarators are only actually allowed for abstract
             // declarators
             uint8_t bitwidth = 0;
@@ -2017,7 +2033,7 @@ declarator parse_parameter_declaration(context *ctx) {
     }
     const type *ty = finalize_type(ctx, &partial_ty);
 
-    return parse_declarator(ctx, ty, true);
+    return parse_declarator(ctx, ty, either);
 }
 
 owned_span parse_parameter_list(context *ctx) {
@@ -2036,17 +2052,21 @@ owned_span parse_parameter_list(context *ctx) {
 }
 
 declarator parse_direct_declarator(context *ctx, const type *ty,
-                                   bool abstract) {
+                                   abstract_allowance abs_allowance) {
     string ident = invalid_str;
     if (check_punc(ctx, PAREN_OPEN)) {
-        declarator decl = parse_declarator(ctx, ty, abstract);
+        declarator decl = parse_declarator(ctx, ty, abs_allowance);
         expect_punc(ctx, PAREN_CLOSE);
         ident = decl.name;
         ty = decl.ty;
     } else {
         if (peek(ctx).type == TOKEN_IDENTIFIER) {
+            if (abs_allowance == strict_abstract) {
+                // expected abstract declarator
+                longjmp(ctx->error_jump, 1);
+            }
             ident = next(ctx).ident;
-        } else if (!abstract) {
+        } else if (abs_allowance == strict_nonabstract) {
             // expected identifier
             longjmp(ctx->error_jump, 1);
         }
@@ -2080,10 +2100,11 @@ declarator parse_direct_declarator(context *ctx, const type *ty,
     return (declarator){.name = ident, .ty = ty, .initializer = {0}};
 }
 
-declarator parse_declarator(context *ctx, const type *ty, bool abstract) {
+declarator parse_declarator(context *ctx, const type *ty,
+                            abstract_allowance abs_allowance) {
     if (check_punc(ctx, STAR))
         parse_pointer_opt(ctx, &ty);
-    return parse_direct_declarator(ctx, ty, abstract);
+    return parse_direct_declarator(ctx, ty, abs_allowance);
 }
 
 // returns a span of declarators
@@ -2099,7 +2120,7 @@ bool parse_declaration(context *ctx, owned_span *decls_out) {
     if (!soft_check_punc(ctx, SEMICOLON)) {
         while (1) {
             vector_push(declarator, &declarators,
-                        parse_declarator(ctx, ty, false));
+                        parse_declarator(ctx, ty, strict_nonabstract));
             if (check_punc(ctx, ASSIGN)) {
                 // todo: handle initializer list
                 value init_value = parse_assignment_expression(ctx);
