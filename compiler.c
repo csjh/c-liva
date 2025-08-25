@@ -128,6 +128,12 @@ void raw_fadd(vector *code, ftype ft, freg rm, freg rn, freg rd) {
                     (uint32_t)rm << 16 | (uint32_t)rn << 5 | (uint32_t)rd << 0);
 }
 
+void raw_fsub(vector *code, ftype ft, freg rm, freg rn, freg rd) {
+    vector_push(uint32_t, code,
+                0b00011110001000000011100000000000 | (uint32_t)ft << 22 |
+                    (uint32_t)rm << 16 | (uint32_t)rn << 5 | (uint32_t)rd << 0);
+}
+
 void raw_restoring_return(vector *code) {
     raw_ldp(code, true, offset, 0, x30, sp, x29);
     vector_push(uint32_t, code, 0b11010110010111110000001111000000);
@@ -1371,6 +1377,122 @@ value handle_addition(context *ctx, value *left, value *right) {
     }
 }
 
+value handle_subtraction(context *ctx, value *left, value *right) {
+    if (is_pointer_type(left->ty) && is_pointer_type(right->ty)) {
+        // pointer difference
+        if (!is_complete_object_type(left->ty->pointer.ty) ||
+            !is_complete_object_type(right->ty->pointer.ty)) {
+            // expected complete object type for pointer arithmetic
+            longjmp(ctx->error_jump, 1);
+        }
+
+        // todo: check type compatibility
+
+        force_into_ireg(&ctx->regs, &ctx->macho.code, left);
+        force_into_ireg(&ctx->regs, &ctx->macho.code, right);
+        ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+        // todo:
+        // move type size into a register
+        // (left - right) / <type size>
+
+        return (value){
+            .ty = &vector_at(type, &ctx->types, long_long),
+            .is_constant = false,
+            .loc = reg,
+            .ireg = output,
+        };
+    } else if (is_pointer_type(left->ty) && is_integer_type(right->ty)) {
+        // pointer arithmetic
+        value *ptr = left;
+        value *offset = right;
+
+        if (!is_complete_object_type(ptr->ty->pointer.ty)) {
+            // expected complete object type for pointer arithmetic
+            longjmp(ctx->error_jump, 1);
+        }
+
+        if (is_constexpr(ptr, offset)) {
+            return (value){
+                .ty = ptr->ty,
+                .is_constant = true,
+                .loc = cons,
+                .integer =
+                    ptr->integer - offset->integer * ptr->ty->pointer.ty->size,
+            };
+        } else {
+            // todo: convert offset to signed 64 bit
+            force_into_ireg(&ctx->regs, &ctx->macho.code, left);
+            force_into_ireg(&ctx->regs, &ctx->macho.code, right);
+            ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+            // todo:
+            // move type size into a register
+            // muladd ptr = <ptr> - <offset> * <type size>
+
+            return (value){
+                .ty = ptr->ty,
+                .is_constant = false,
+                .loc = reg,
+                .ireg = output,
+            };
+        }
+    } else if (is_arithmetic_type(left->ty) && is_arithmetic_type(right->ty)) {
+        // neither types are pointers, should be an arithmetic addition
+        undergo_arithmetic_conversion(ctx, &left->ty, &right->ty);
+
+        if (is_integer_type(left->ty)) {
+            if (is_constexpr(left, right)) {
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = true,
+                    .loc = cons,
+                    .integer = left->integer - right->integer,
+                };
+            } else {
+                force_into_ireg(&ctx->regs, &ctx->macho.code, left);
+                force_into_ireg(&ctx->regs, &ctx->macho.code, right);
+                ireg output = get_new_ireg(&ctx->regs, &ctx->macho.code);
+
+                assert(left->ty->size == sizeof(uint32_t) ||
+                       left->ty->size == sizeof(uint64_t));
+                raw_sub(&ctx->macho.code, left->ty->size == sizeof(uint64_t),
+                        left->ireg, right->ireg, output, lsl, 0);
+
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = false,
+                    .loc = reg,
+                    .ireg = output,
+                };
+            }
+        } else {
+            if (is_constexpr(left, right)) {
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = true,
+                    .loc = cons,
+                    .fp = left->fp - right->fp,
+                };
+            } else {
+                force_into_freg(&ctx->regs, &ctx->macho.code, left);
+                force_into_freg(&ctx->regs, &ctx->macho.code, right);
+                freg output = get_new_freg(&ctx->regs, &ctx->macho.code);
+
+                raw_fsub(&ctx->macho.code, left->ty->primitive == double_,
+                         left->freg, right->freg, output);
+
+                return (value){
+                    .ty = left->ty,
+                    .is_constant = false,
+                    .loc = reg,
+                    .freg = output,
+                };
+            }
+        }
+    } else {
+        // invalid types for subtraction
+        longjmp(ctx->error_jump, 1);
     }
 }
 
@@ -1383,8 +1505,7 @@ value parse_additive_expression(context *ctx) {
             left = handle_addition(ctx, &left, &right);
         } else if (check_punc(ctx, MINUS)) {
             value right = parse_multiplicative_expression(ctx);
-            // do something with left and right
-            left = (value){/* combine left and right */};
+            left = handle_subtraction(ctx, &left, &right);
         } else {
             break;
         }
