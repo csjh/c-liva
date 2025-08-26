@@ -15,9 +15,9 @@
 void raw_noop(vector *code) { vector_push(uint32_t, code, 0xd503201f); }
 
 typedef enum enctype {
-    offset = 0b10,
-    preidx = 0b11,
-    pstidx = 0b01,
+    enctype_offset = 0b10,
+    enctype_preidx = 0b11,
+    enctype_pstidx = 0b01,
 } enctype;
 
 void raw_ldp(vector *code, bool sf, enctype enc, int16_t imm, ireg rt2, ireg rn,
@@ -51,10 +51,10 @@ void raw_stp(vector *code, bool sf, enctype enc, int16_t imm, ireg rt2, ireg rn,
 }
 
 typedef enum shifttype {
-    lsl = 0b00,
-    lsr = 0b01,
-    asr = 0b10,
-    ror = 0b11,
+    shifttype_lsl = 0b00,
+    shifttype_lsr = 0b01,
+    shifttype_asr = 0b10,
+    shifttype_ror = 0b11,
 } shifttype;
 
 void raw_addsub(vector *code, bool sf, bool sub, bool setflags, shifttype shift,
@@ -112,14 +112,14 @@ void raw_orr(vector *code, bool sf, shifttype shift, ireg rm, uint8_t shift_imm,
 }
 
 void raw_mov(vector *code, bool sf, ireg src, ireg dst) {
-    raw_orr(code, sf, lsl, src, 0, xzr, dst);
+    raw_orr(code, sf, shifttype_lsl, src, 0, xzr, dst);
 }
 
 typedef enum ftype {
-    single_precision = 0b00, // Single-precision
-    double_precision = 0b01, // Double-precision
-    big = 0b10,              // 128 bit
-    half = 0b11,             // Half-precision
+    ftype_single = 0b00, // Single-precision
+    ftype_double = 0b01, // Double-precision
+    ftype_big = 0b10,    // 128 bit
+    ftype_half = 0b11,   // Half-precision
 } ftype;
 
 void raw_fadd(vector *code, ftype ft, freg rm, freg rn, freg rd) {
@@ -135,7 +135,7 @@ void raw_fsub(vector *code, ftype ft, freg rm, freg rn, freg rd) {
 }
 
 void raw_restoring_return(vector *code) {
-    raw_ldp(code, true, offset, 0, x30, sp, x29);
+    raw_ldp(code, true, enctype_offset, 0, x30, sp, x29);
     vector_push(uint32_t, code, 0b11010110010111110000001111000000);
 }
 
@@ -1338,7 +1338,7 @@ value handle_addition(context *ctx, value *left, value *right) {
                 assert(left->ty->size == sizeof(uint32_t) ||
                        left->ty->size == sizeof(uint64_t));
                 raw_add(&ctx->macho.code, left->ty->size == sizeof(uint64_t),
-                        left->ireg, right->ireg, output, lsl, 0);
+                        left->ireg, right->ireg, output, shifttype_lsl, 0);
 
                 return (value){
                     .ty = left->ty,
@@ -1457,7 +1457,7 @@ value handle_subtraction(context *ctx, value *left, value *right) {
                 assert(left->ty->size == sizeof(uint32_t) ||
                        left->ty->size == sizeof(uint64_t));
                 raw_sub(&ctx->macho.code, left->ty->size == sizeof(uint64_t),
-                        left->ireg, right->ireg, output, lsl, 0);
+                        left->ireg, right->ireg, output, shifttype_lsl, 0);
 
                 return (value){
                     .ty = left->ty,
@@ -2449,7 +2449,7 @@ void parse_external_declaration(context *ctx) {
             add_function_definition(ctx, first);
 
             // function prelude
-            raw_stp(&ctx->macho.code, true, offset, 0, x30, sp, x29);
+            raw_stp(&ctx->macho.code, true, enctype_offset, 0, x30, sp, x29);
             raw_add_cons(&ctx->macho.code, true, 0, sp, x29, false);
             // todo: handle stack size
             raw_sub_cons(&ctx->macho.code, true, 0, sp, sp, false);
