@@ -100,6 +100,51 @@ void raw_sub_cons(vector *code, bool sf, uint16_t imm12, ireg rn, ireg rd,
     raw_addsub_cons(code, sf, true, false, shift, imm12, rn, rd);
 }
 
+typedef struct logical_imm {
+    // uint32_t prefix : 9;
+    uint32_t N : 1;
+    uint32_t immr : 6;
+    uint32_t imms : 6;
+    // uint32_t postfix : 10;
+} logical_imm;
+
+uint64_t rotr64(uint64_t val, unsigned int shift) {
+    return (val >> shift) | (val << (64 - shift));
+}
+
+bool try_logical_imm64(uint64_t val, logical_imm *out) {
+    if (val == 0 || ~val == 0)
+        return false;
+
+    uint32_t rotation = __builtin_ctzll(val & (val + 1));
+    uint64_t normalized = rotr64(val, rotation & 63);
+
+    uint32_t zeroes = __builtin_clzll(normalized);
+    uint32_t ones = __builtin_ctzll(~normalized);
+    uint32_t size = zeroes + ones;
+
+    if (rotr64(val, size & 63) != val)
+        return false;
+
+    *out = (logical_imm){.N = size >> 6,
+                         .immr = -rotation & (size - 1),
+                         .imms = (-(size << 1) | (ones - 1)) & 0x3f};
+    return true;
+}
+
+bool try_logical_imm32(uint32_t val, logical_imm *out) {
+    uint64_t val64 = ((uint64_t)val << 32) | val;
+    return try_logical_imm64(val64, out);
+}
+
+void raw_orr_imm(vector *code, bool sf, logical_imm imm, ireg rn, ireg rd) {
+    vector_push(uint32_t, code,
+                0b00110010000000000000000000000000 | (uint32_t)sf << 31 |
+                    (uint32_t)imm.N << 22 | (uint32_t)imm.immr << 16 |
+                    (uint32_t)imm.imms << 10 | (uint32_t)rn << 5 |
+                    (uint32_t)rd << 0);
+}
+
 void raw_orr(vector *code, bool sf, shifttype shift, ireg rm, uint8_t shift_imm,
              ireg rn, ireg rd) {
     assert(shift_imm < (sf ? 64 : 32));
