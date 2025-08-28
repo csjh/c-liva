@@ -465,7 +465,8 @@ typedef struct enum_value {
 } enum_value;
 
 typedef struct regallocator {
-
+    uint32_t current_ireg;
+    uint32_t current_freg;
 } regallocator;
 
 typedef struct function_defn {

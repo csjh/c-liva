@@ -185,6 +185,16 @@ void raw_restoring_return(vector *code) {
 }
 
 // regalloc functions
+ireg get_new_ireg(regallocator *regs, vector *code) {
+    // todo: make this go through the vector
+    // todo: spill existing value from chosen register
+    return (ireg)regs->current_ireg++;
+}
+
+freg get_new_freg(regallocator *regs, vector *code) {
+    return (freg)regs->current_freg++;
+}
+
 void force_into_specific_ireg(regallocator *regs, vector *code, struct value *v,
                               ireg dest) {
     assert(v->loc == reg);
