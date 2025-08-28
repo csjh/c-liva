@@ -195,7 +195,7 @@ freg get_new_freg(regallocator *regs, vector *code) {
     return (freg)regs->current_freg++;
 }
 
-void force_into_specific_ireg(regallocator *regs, vector *code, struct value *v,
+void force_into_specific_ireg(regallocator *regs, vector *code, value *v,
                               ireg dest) {
     assert(v->loc == reg);
 
@@ -210,7 +210,7 @@ void force_into_ireg(regallocator *regs, vector *code, struct value *v) {
     assert(v->loc == reg);
 }
 
-void force_into_freg(regallocator *regs, vector *code, struct value *v) {
+void force_into_freg(regallocator *regs, vector *code, value *v) {
     assert(v->loc == reg);
 }
 
