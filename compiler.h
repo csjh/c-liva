@@ -129,7 +129,7 @@ typedef struct type {
     };
 } type;
 
-typedef enum location { reg, stack, cons, flags } location;
+typedef enum location { reg, indirect, cons, flags } location;
 typedef enum value_category {
     rvalue,
     lvalue,
@@ -186,7 +186,10 @@ typedef struct value {
     union {
         ireg ireg;
         freg freg;
-        uint32_t offset;
+        struct {
+            enum ireg base;
+            uint64_t offset;
+        } indirection;
         cond flags;
 
         // for constant expressions

@@ -288,8 +288,9 @@ void force_into_ireg(regallocator *regs, vector *code, value *v) {
     switch (v->loc) {
     case reg:
         break;
-    case stack:
-        masm_load_offset(regs, code, v->ty, v->offset, sp, anyregify(outreg));
+    case indirect:
+        masm_load_offset(regs, code, v->ty, v->indirection.offset,
+                         v->indirection.base, anyregify(outreg));
         break;
     case cons:
         masm_move_integer(code, v->integer, outreg);
@@ -307,8 +308,9 @@ void force_into_freg(regallocator *regs, vector *code, value *v) {
     switch (v->loc) {
     case reg:
         break;
-    case stack:
-        masm_load_offset(regs, code, v->ty, v->offset, sp, anyregify(outreg));
+    case indirect:
+        masm_load_offset(regs, code, v->ty, v->indirection.offset,
+                         v->indirection.base, anyregify(outreg));
         break;
     case cons: {
         uint64_t iv;
