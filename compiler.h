@@ -147,6 +147,13 @@ typedef enum freg {
     d16, d17, d18, d19, d20, d21, d22, d23, d24, d25, d26, d27, d28, d29, d30, d31,
 } freg;
 
+typedef struct anyreg {
+    bool is_float;
+    int reg;
+} anyreg;
+
+#define anyregify(x) ((anyreg){.is_float = _Generic((x), freg: true, ireg: false), .reg = (x)})
+
 typedef enum cond {
     eq = 0b0000, // Equal.
     ne = 0b0001, // Not equal.
@@ -166,6 +173,8 @@ typedef enum cond {
     nv = 0b1111, // Never executed.
 } cond;
 // clang-format on
+
+inline cond invert_cond(cond c) { return (cond)((uint8_t)c ^ 1); }
 
 typedef struct value {
     value_category category;

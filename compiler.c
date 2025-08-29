@@ -184,6 +184,79 @@ void raw_restoring_return(vector *code) {
     vector_push(uint32_t, code, 0b11010110010111110000001111000000);
 }
 
+void raw_csinc(vector *code, bool sf, ireg rm, cond c, ireg rn, ireg rd) {
+    vector_push(uint32_t, code,
+                0b00011010100000000000010000000000 | (uint32_t)sf << 31 |
+                    (uint32_t)rm << 16 | (uint32_t)c << 12 | (uint32_t)rn << 5 |
+                    (uint32_t)rd << 0);
+}
+
+void raw_cset(vector *code, bool sf, cond c, ireg rd) {
+    raw_csinc(code, sf, xzr, invert_cond(c), xzr, rd);
+}
+
+void raw_mov_reg(vector *code, bool sf, ireg src, ireg dst) {
+    raw_orr(code, sf, shifttype_lsl, src, 0, xzr, dst);
+}
+
+void raw_mov_imm(vector *code, bool sf, bool notneg, bool keep, uint8_t hw,
+                 uint16_t imm, ireg rd) {
+    assert(hw < 4);
+
+    vector_push(uint32_t, code,
+                0b00010010100000000000000000000000 | (uint32_t)sf << 31 |
+                    (uint32_t)notneg << 30 | (uint32_t)keep << 29 |
+                    (uint32_t)hw << 21 | (uint32_t)imm << 5 | (uint8_t)rd << 0);
+}
+
+typedef enum memtype {
+    memtype_b = 0b00, // Byte
+    memtype_h = 0b01, // Halfword
+    memtype_w = 0b10, // Word
+    memtype_x = 0b11, // Doubleword
+} memtype;
+
+typedef enum resexttype {
+    resexttype_str = 0b00, // Store
+    resexttype_uns = 0b01, // Unsigned
+    resexttype_dse = 0b10, // Extend to doubleword
+    resexttype_wse = 0b11, // Extend to word
+} resexttype;
+
+typedef enum indexttype {
+    indexttype_uxtw = 0b010,
+    indexttype_lsl = 0b011,
+    indexttype_sxtw = 0b110,
+    indexttype_sxtx = 0b111,
+} indexttype;
+
+void raw_load_reg(vector *code, memtype ty, resexttype resext,
+                  indexttype indext, bool S, ireg rm, ireg rn, anyreg rt) {
+    vector_at(uint32_t, code,
+              0b00111000001000000000100000000000 | (uint32_t)ty << 30 |
+                  (uint32_t)rt.is_float << 26 | (uint32_t)resext << 22 |
+                  (uint32_t)rm << 16 | (uint32_t)indext << 13 |
+                  (uint32_t)S << 12 | (uint32_t)rn << 5 |
+                  (uint32_t)rt.reg << 0);
+}
+
+void raw_load_offset(vector *code, memtype ty, uint32_t offset, ireg rn,
+                     anyreg rt) {
+    uint32_t width = ty == memtype_b   ? 1
+                     : ty == memtype_h ? 2
+                     : ty == memtype_w ? 4
+                                       : 8;
+
+    assert(offset % width == 0);
+    assert(offset < (1 << 12) * width);
+
+    offset /= width;
+    vector_push(uint32_t, code,
+                0b10111001010000000000000000000000 | (uint32_t)ty << 30 |
+                    (uint32_t)rt.is_float << 26 | (uint32_t)offset << 10 |
+                    (uint32_t)rn << 5 | (uint32_t)rt.reg << 0);
+}
+
 // regalloc functions
 ireg get_new_ireg(regallocator *regs, vector *code) {
     // todo: make this go through the vector
@@ -206,24 +279,126 @@ void force_into_specific_ireg(regallocator *regs, vector *code, value *v,
     raw_mov(code, true, v->ireg, dest);
 }
 
-void force_into_ireg(regallocator *regs, vector *code, struct value *v) {
-    assert(v->loc == reg);
+void masm_load_offset(regallocator *regs, vector *code, const type *ty,
+                      uint64_t offset, ireg rn, anyreg dst);
+void masm_move_integer(vector *code, int64_t imm, ireg dst);
+
+void force_into_ireg(regallocator *regs, vector *code, value *v) {
+    ireg outreg = v->loc == reg ? v->ireg : get_new_ireg(regs, code);
+    switch (v->loc) {
+    case reg:
+        break;
+    case stack:
+        masm_load_offset(regs, code, v->ty, v->offset, sp, anyregify(outreg));
+        break;
+    case cons:
+        masm_move_integer(code, v->integer, outreg);
+        break;
+    case flags:
+        raw_cset(code, false, v->flags, outreg);
+        break;
+    }
+    v->loc = reg;
+    v->ireg = outreg;
 }
 
 void force_into_freg(regallocator *regs, vector *code, value *v) {
-    assert(v->loc == reg);
+    freg outreg = v->loc == reg ? v->freg : get_new_freg(regs, code);
+    switch (v->loc) {
+    case reg:
+        break;
+    case stack:
+        masm_load_offset(regs, code, v->ty, v->offset, sp, anyregify(outreg));
+        break;
+    case cons: {
+        uint64_t iv;
+        // todo: make this not fuck up 32 bit floats
+        memcpy(&iv, &v->fp, sizeof(v->fp));
+        ireg reg = get_new_ireg(regs, code);
+        masm_move_integer(code, iv, reg);
+        // todo: raw_fmov();
+        break;
+    }
+    case flags:
+        assert(false);
+    }
+    v->loc = reg;
+    v->freg = outreg;
 }
 
-int current_ireg = 3;
+// macro assembler
+void masm_load_offset(regallocator *regs, vector *code, const type *ty,
+                      uint64_t offset, ireg rn, anyreg rt) {
+    assert(ty->tag == basic);
 
-ireg get_new_ireg(regallocator *regs, vector *code) {
-    return (ireg)current_ireg++;
+    memtype memt;
+    switch (ty->primitive) {
+    case void_:
+    case n_primitive_types:
+        assert(false);
+
+    case bool_:
+    case signed_char:
+    case char_:
+    case unsigned_char:
+        memt = memtype_b;
+        break;
+    case short_:
+    case unsigned_short:
+        memt = memtype_h;
+        break;
+    case int_:
+    case unsigned_int:
+    case float_:
+        memt = memtype_w;
+        break;
+    case long_:
+    case long_long:
+    case unsigned_long:
+    case unsigned_long_long:
+    case double_:
+    case long_double:
+        memt = memtype_x;
+        break;
+    }
+
+    if (offset < 1 << 12) {
+        raw_load_offset(code, memt, offset, rn, rt);
+    } else if (offset < 1 << 24) {
+        raw_add_cons(code, true, offset >> 12, rn, rn, true);
+        raw_load_offset(code, memt, offset & 0xfff, rn, rt);
+        raw_sub_cons(code, true, offset >> 12, rn, rn, true);
+    } else {
+        ireg offsetreg = get_new_ireg(regs, code);
+        masm_move_integer(code, offset, offsetreg);
+        raw_load_reg(code, memt, resexttype_uns, indexttype_lsl, false,
+                     offsetreg, rn, rt);
+    }
 }
 
-int current_freg = 3;
+void masm_move_integer(vector *code, int64_t imm, ireg dst) {
+    if (imm == 0) {
+        raw_mov_reg(code, true, xzr, dst);
+        return;
+    }
 
-freg get_new_freg(regallocator *regs, vector *code) {
-    return (freg)current_freg++;
+    logical_imm logical;
+    if (try_logical_imm64(imm, &logical)) {
+        raw_orr_imm(code, true, logical, xzr, dst);
+        return;
+    }
+
+    bool keep = false;
+    for (size_t i = 0; i < 4; i++) {
+        uint16_t literal = imm & 0xffff;
+        imm >>= 16;
+        if (literal == 0)
+            continue;
+        raw_mov_imm(code, true, true, keep, i, literal, dst);
+        if (!keep && !imm)
+            return;
+        keep = true;
+    }
 }
 
 void print_type(const type *ty) {
