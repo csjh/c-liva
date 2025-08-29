@@ -1363,7 +1363,7 @@ value parse_primary_expression(context *ctx) {
         // string literal
         // todo: put string literal into readonly, this is just a pointer
         return (value){};
-    } else if (tok.type == TOKEN_PUNCTUATOR && tok.punc == '(') {
+    } else if (check_punc(ctx, PAREN_OPEN)) {
         // parenthesized expression or cast or compound literal
         const type *ty = parse_type_name(ctx);
         if (!ty) {
@@ -1379,7 +1379,7 @@ value parse_primary_expression(context *ctx) {
                 return (value){/* handle cast */};
             }
         }
-    } else if (tok.type == TOKEN_KEYWORD && tok.kw == _Generic_kw) {
+    } else if (check_keyword(ctx, _Generic_kw)) {
         // _Generic expression
         return (value){/* handle _Generic expression */};
     } else {
