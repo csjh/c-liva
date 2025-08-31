@@ -1215,7 +1215,13 @@ bool is_arithmetic_type(const type *ty) {
     return is_integer_type(ty) || is_floating_type(ty);
 }
 
-bool is_pointer_type(const type *ty) { return ty->tag == pointer; }
+bool is_pointer_type(const type *ty) {
+    return ty->tag == pointer || ty->tag == array;
+}
+
+bool is_scalar_type(const type *ty) {
+    return is_arithmetic_type(ty) || is_pointer_type(ty);
+}
 
 bool is_complete_object_type(const type *ty) { return ty->is_complete; }
 
