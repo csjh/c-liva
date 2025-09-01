@@ -1306,6 +1306,47 @@ void undergo_arithmetic_conversion(context *ctx, const type **ty1,
     *ty2 = *ty1;
 }
 
+value handle_subscript(context *ctx, value *ptr, value *index) {
+    // todo: implement
+}
+
+value handle_dereference(context *ctx, value *ptr) {
+    return handle_subscript(ctx, ptr,
+                            &(value){.category = rvalue,
+                                     .ty = &vector_at(type, &ctx->types, int_),
+                                     .is_constant = true,
+                                     .alignment = 0,
+                                     .loc = cons,
+                                     .integer = 0});
+}
+
+value handle_member_access(context *ctx, value *base, string member_name) {
+    if (base->ty->tag != structure) {
+        // expected struct or union type for member access
+        longjmp(ctx->error_jump, 1);
+    }
+
+    resolve_indirection(&ctx->regs, &ctx->macho.code, base);
+
+    owned_span members = base->ty->structure.members;
+    for (int i = 0; i < members.size; i++) {
+        member m = vector_at(member, &members, i);
+        if (string_equal(m.name, member_name)) {
+            return (value){.category = lvalue,
+                           .ty = m.ty,
+                           .is_constant = false,
+                           .alignment = m.alignment,
+                           .loc = indirect,
+                           .indirection.base = base->indirection.base,
+                           .indirection.offset =
+                               base->indirection.offset + m.offset};
+        }
+    }
+
+    // member not found
+    longjmp(ctx->error_jump, 1);
+}
+
 value parse_expression(context *ctx);
 value parse_assignment_expression(context *ctx);
 
