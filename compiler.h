@@ -87,6 +87,7 @@ typedef struct member {
     string name;
     const struct type *ty;
     size_t offset;
+    uint32_t alignment;
     uint8_t bitwidth; // 0 if not a bitfield
 } member;
 
@@ -154,6 +155,11 @@ typedef struct anyreg {
 
 #define anyregify(x) ((anyreg){.is_float = _Generic((x), freg: true, ireg: false), .reg = (x)})
 
+typedef struct indirection {
+    ireg base;
+    uint32_t offset;
+} indirection;
+
 typedef enum cond {
     eq = 0b0000, // Equal.
     ne = 0b0001, // Not equal.
@@ -186,10 +192,7 @@ typedef struct value {
     union {
         ireg ireg;
         freg freg;
-        struct {
-            enum ireg base;
-            uint64_t offset;
-        } indirection;
+        indirection indirection;
         cond flags;
 
         // for constant expressions

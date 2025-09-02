@@ -283,6 +283,28 @@ void masm_load_offset(regallocator *regs, vector *code, const type *ty,
                       uint64_t offset, ireg rn, anyreg dst);
 void masm_move_integer(vector *code, int64_t imm, ireg dst);
 
+void resolve_indirection(regallocator *regs, vector *code, value *v) {
+    indirection indir = {0};
+    switch (v->loc) {
+    case reg:
+        indir.base = v->ireg;
+        break;
+    case indirect:
+        indir = v->indirection;
+        break;
+    case cons:
+        indir.base = get_new_ireg(regs, code);
+        masm_move_integer(code, v->integer, indir.base);
+        break;
+    case flags:
+        indir.base = get_new_ireg(regs, code);
+        raw_cset(code, false, v->flags, indir.base);
+        break;
+    }
+    v->loc = indirect;
+    v->indirection = indir;
+}
+
 void force_into_ireg(regallocator *regs, vector *code, value *v) {
     ireg outreg = v->loc == reg ? v->ireg : get_new_ireg(regs, code);
     switch (v->loc) {
@@ -1306,18 +1328,22 @@ void undergo_arithmetic_conversion(context *ctx, const type **ty1,
     *ty2 = *ty1;
 }
 
+value make_sizet_literal(context *ctx, size_t integer) {
+    return (value){.category = rvalue,
+                   .ty = &vector_at(type, &ctx->types, unsigned_long_long),
+                   .is_constant = true,
+                   .alignment = 0,
+                   .loc = cons,
+                   .integer = integer};
+}
+
 value handle_subscript(context *ctx, value *ptr, value *index) {
     // todo: implement
 }
 
 value handle_dereference(context *ctx, value *ptr) {
-    return handle_subscript(ctx, ptr,
-                            &(value){.category = rvalue,
-                                     .ty = &vector_at(type, &ctx->types, int_),
-                                     .is_constant = true,
-                                     .alignment = 0,
-                                     .loc = cons,
-                                     .integer = 0});
+    value idx = make_sizet_literal(ctx, 0);
+    return handle_subscript(ctx, ptr, &idx);
 }
 
 value handle_member_access(context *ctx, value *base, string member_name) {
@@ -1444,8 +1470,7 @@ value parse_postfix_expression(context *ctx) {
         // array subscript
         value index = parse_assignment_expression(ctx);
         expect_punc(ctx, BRACKET_CLOSE);
-        // todo: handle array subscript
-        return (value){/* array subscript */};
+        return handle_subscript(ctx, &base, &index);
     } else if (check_punc(ctx, PAREN_OPEN)) {
         // function call
         while (!check_punc(ctx, PAREN_CLOSE)) {
@@ -1458,12 +1483,12 @@ value parse_postfix_expression(context *ctx) {
     } else if (check_punc(ctx, DOT)) {
         // member access
         string member = get_identifier(ctx);
-        // todo: handle member access
-        return (value){/* member access */};
+        return handle_member_access(ctx, &base, member);
     } else if (check_punc(ctx, ARROW)) {
         // pointer member access
         string member = get_identifier(ctx);
-        return (value){/* pointer member access */};
+        value deref = handle_dereference(ctx, &base);
+        return handle_member_access(ctx, &deref, member);
     } else if (check_punc(ctx, INCREMENT)) {
         // unary increment
         // do something with the unary increment
@@ -1491,8 +1516,7 @@ value parse_unary_expression(context *ctx) {
         return (value){/* unary plus */};
     } else if (check_punc(ctx, STAR)) {
         value operand = parse_unary_expression(ctx);
-        // do something with the unary minus
-        return (value){/* unary minus */};
+        return handle_dereference(ctx, &operand);
     } else if (check_punc(ctx, PLUS)) {
         value operand = parse_unary_expression(ctx);
         // do something with the logical not
@@ -1513,15 +1537,13 @@ value parse_unary_expression(context *ctx) {
         const type *ty = NULL;
         if (check_punc(ctx, PAREN_OPEN)) {
             ty = parse_type_name(ctx);
-            if (!ty) {
+            if (!ty)
                 ty = parse_expression(ctx).ty;
-            }
             expect_punc(ctx, PAREN_CLOSE);
         } else {
             ty = parse_unary_expression(ctx).ty;
         }
-        // todo: use ty->size
-        return (value){/* sizeof expression */};
+        return make_sizet_literal(ctx, ty->size);
     } else {
         // todo: support _Alignof
         return parse_postfix_expression(ctx);
